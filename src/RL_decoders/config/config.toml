@@ -1,0 +1,31 @@
+[run]
+seed = 100
+
+[dataset]
+dir = "datasets/original"
+expt = "monkey_1_set_1"
+format = "npy" 
+
+[feedback]
+error = 0
+sparse_rate = 0
+
+[banditron] #banditron(X, y, error, sparse_rate, k, gamma)
+k = 2
+gamma = 0.0001
+eta = 0.5
+
+[hrl]
+muH = 0.01
+muO = 0.01
+num_nodes = [22, 3]
+
+[agrel] #AGREL(X, y, error, sparse_rate, gamma, alpha, beta, num_nodes)
+gamma = 0.02
+alpha = 0.1
+beta = 0.1
+num_nodes = [22, 3]
+
+[dqn] #DQN(X,Y,error,sparse_rate,epsilon,gamma)
+epsilon = 0.01
+gamma_DQN = 0.1

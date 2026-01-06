@@ -1,0 +1,12 @@
+__pycache__
+*.svg
+*.pdf
+test.py
+*.png
+001201
+**/*.csv
+requirements.txt
+*.csv
+outputs/participation_ratios.csv
+*.pkl
+*.csv
