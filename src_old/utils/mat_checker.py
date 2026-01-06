@@ -4,6 +4,10 @@ import scipy.io as sio
 from datetime import datetime, timedelta
 
 def try_convert_labviewstart(x):
+    """
+    LabviewStart が何基準か不明なので、ありがちな変換候補をいくつか試して
+    'それっぽい' datetime を返す（当たりを見つけるためのデバッグ用）。
+    """
     if x is None:
         return []
     try:
