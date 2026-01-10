@@ -1,4 +1,4 @@
-# RLINK
+# RLINK - Reinforcement Learning for LINK dataset
 This is a repository for ML final project in Bar-Ilan University in 2025. The code contains implementations and analyses of **reinforcement learning–based neural decoders** applied to intracortical brain–machine interface (iBMI) data from the **LINK dataset**. The project focuses on lightweight, online-learning decoders that are robust to **neural non-stationarity** across recording sessions and days.
 
 ---
@@ -27,7 +27,7 @@ The following decoders are implemented and evaluated:
 - Hebbian learning rule modulated by scalar reward
 - Local, biologically plausible weight updates
 - Serves as a reinforcement-based baseline decoder
-- 
+
 ---
 
 ## Dataset: LINK
