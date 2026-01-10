@@ -15,16 +15,21 @@ k = 2
 gamma = 0.0001
 eta = 0.5
 
+[banditronRP] #banditronRP(X, y, error, sparse_rate, k, gamma)
+k = 128
+gamma = 0.0001
+eta = 0.5
+
 [hrl]
 muH = 0.01
 muO = 0.01
-num_nodes = [22, 3]
+num_nodes = [95,3]
 
 [agrel] #AGREL(X, y, error, sparse_rate, gamma, alpha, beta, num_nodes)
 gamma = 0.02
 alpha = 0.1
 beta = 0.1
-num_nodes = [22, 3]
+num_nodes = [95, 3, 5]
 
 [dqn] #DQN(X,Y,error,sparse_rate,epsilon,gamma)
 epsilon = 0.01

@@ -40,6 +40,12 @@ def build_params(model_type, cfg: dict) -> dict:
         if setting["gamma"] is None:
             raise ValueError("config missing: [banditron].gamma")
         setting["gamma"] = float(setting["gamma"])
+    elif model_type == "banditronRP":
+        setting["gamma"] = cfg.get("banditron").get("gamma")
+        setting["k"] = cfg.get("banditron").get("k")
+        if setting["gamma"] is None:
+            raise ValueError("config missing: [banditron].gamma")
+        setting["gamma"] = float(setting["gamma"])
 
     elif model_type == "HRL":
         setting["muH"] = cfg.get("hrl").get("muH")

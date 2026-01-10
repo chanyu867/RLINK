@@ -34,6 +34,9 @@ from lightgbm import LGBMRegressor
 from sklearn.multioutput import MultiOutputRegressor
 # import scipy.special as sp
 
+from scipy.special import expit as sigmoid
+from scipy.special import softmax
+
 # Defining the Banditron Function (Single Layered Network)
 '''
 Here, **kwargs is used to denote the arbitary input functions. The error and sparsity_rate
@@ -44,6 +47,7 @@ and y denotes the true labels associated with each observation (X)
 '''
 def banditron(X, y, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The exploration exploitation constant and eta are given as optional arguments.
     #(a) turning 90o right, (b) moving forward by 2 m, (c) turning 90o left, and (d) staying still for 5 seconds (stop task)
+    #k is originally 4
     
     #1. retrieve params:
     T = X.shape[0] 
@@ -53,7 +57,6 @@ def banditron(X, y, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The 
     
     error_count = np.zeros(T) 
     pred = [] # The predicted labels will be stored here
-    print(f"details: X:{X.shape}, error:{error}, sparsity_rate:{sparsity_rate}, k:{k}, gamma:{gamma}")
 
     # 2. Evaluative framework (refer to the paper to understand the mathematics)
     for t in range(T):
@@ -90,11 +93,11 @@ paper to understand the physical significance). k denotes the number of classes 
 fixed at 4 for our experiments. X denotes the spike count data (observation -- input dataset) 
 and y denotes the true labels associated with each observation (X) 
 '''
-def banditronRP(X, y, k, error, sparsity_rate, **kwargs):
+def banditronRP(X, y, error, sparsity_rate, k, gamma):
     d = X.shape[1]
     Wrand = np.random.uniform(size=(k,d)) # The random Weight matrix generated from a normal distribution.
     f = sigmoid(np.dot(Wrand,X.T)) # The non-linear projection vector input to the hidden layer.
-    pred = banditron(f.T, y, error, sparsity_rate, **kwargs) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
+    pred = banditron(f.T, y, error, sparsity_rate, k=2, gamma=gamma) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
     return pred
 
 # Defining the HRL function (Three Layered Network)
@@ -129,7 +132,7 @@ def HRL(X, y, muH, muO, num_nodes, error, sparsity_rate):
     for t in range(T):
       x = np.insert(X[t],0,1) #increase shape here
       out = [x.reshape(-1,1)]*(len(num_nodes))     
-      # print("X shape:", x.reshape(-1,1).shape, len(num_nodes), np.array(W).shape)
+      # print("X shape:", x.reshape(-1,1).shape, num_nodes, np.array(W).shape) #X shape: (96, 1) 2 (1, 3, 23)
       for i in range(1,len(num_nodes)):
         out[i] = np.tanh(np.dot(W[i-1],out[i-1]))
       
@@ -200,9 +203,9 @@ def AGREL(X, y, error, sparsity_rate, gamma, alpha, beta, num_nodes):
       sparsify = np.random.choice([True,False],p=[sparsity_rate,1-sparsity_rate])
       if not sparsify:
         if y_tilde == y[t]:
-          delta = np.random.choice([-1 ,1 - outs[y_tilde]],p=[error,1-error])
+          delta = np.random.choice([-1 ,1 - float(outs[y_tilde])],p=[error,1-error])
         else:
-          delta = np.random.choice([-1 ,1 - outs[y_tilde]],p=[1-error,error])
+          delta = np.random.choice([-1 ,1 - float(outs[y_tilde])],p=[1-error,error])
         '''
         In AGREL, δ therefore influences plasticity through
         an expansive function f (δ), which also helps to fasten

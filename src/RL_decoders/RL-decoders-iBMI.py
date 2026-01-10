@@ -8,7 +8,7 @@
 
 # Importing the necessary libraries and modules.
 from utils import *
-from algorithms import *
+from RL_decoders.algorithms import *
 import warnings
 import time
 warnings.filterwarnings('ignore')
@@ -146,7 +146,7 @@ def analysis(choice, dir, files, flag, **kwargs):
             # num_nodes = [int(x) for x in list(num_nodes)] #convert given number as int values
             num_nodes = [X.shape[1], 3] #-> dummy
             print("num_nodes: ", num_nodes)
-            pred = model(X, y, muH, muO, num_nodes=num_nodes, error=error, sparse_rate=sparsity_rate)
+            pred = model(X, y, muH, muO, num_nodes=num_nodes, error=error, sparsity_rate=sparsity_rate)
         elif choice == 'd':
             # for gamma, alpha, beta, num_nodes, error, sparsity_rate in kwargs.items():
             gamma, alpha, beta, num_nodes, error, sparsity_rate = kwargs['gamma_AGREL'], kwargs['alpha'], kwargs['beta'], kwargs['num_nodes_AGREL'], kwargs['error'], kwargs['sparsity_rate']
@@ -175,33 +175,33 @@ def analysis(choice, dir, files, flag, **kwargs):
         interval.append(2.58*np.sqrt(error_intervals*(1-error_intervals))/results_df.shape[0])
         acc.append((np.sum(results_df.loc[:,"True"] == results_df.loc[:,"Pred"])/results_df.shape[0])*100)
 
-    if flag == 1:
-        print("length of files: ", len(files), len(acc))
-        plt.figure(figsize=(10,5))
-        plt.plot(range(1,len(files)+1),acc,'b-o')
-        plt.grid()
-        plt.ylim((20,120))
-        plt.ylabel('Accuracy (in %)')
-        plt.xlabel('Sessions')
-        plt.xticks(range(1,len(files)+1), labels=['session_'+str(i) for i in range(1,len(files)+1)]) #each sessions name for x values
-        for x,y in zip(range(1,len(files)+1),acc):
-            label = "{:.2f}".format(y)
-            plt.annotate(label, # this is the text
-                (x,y), # these are the coordinates to position the label
-                textcoords="offset points", # how to position the text
-                xytext=(-10,-20)) # distance from text to points (x,y)
+    # if flag == 1:
+    #     print("length of files: ", len(files), len(acc))
+    #     plt.figure(figsize=(10,5))
+    #     plt.plot(range(1,len(files)+1),acc,'b-o')
+    #     plt.grid()
+    #     plt.ylim((20,120))
+    #     plt.ylabel('Accuracy (in %)')
+    #     plt.xlabel('Sessions')
+    #     plt.xticks(range(1,len(files)+1), labels=['session_'+str(i) for i in range(1,len(files)+1)]) #each sessions name for x values
+    #     for x,y in zip(range(1,len(files)+1),acc):
+    #         label = "{:.2f}".format(y)
+    #         plt.annotate(label, # this is the text
+    #             (x,y), # these are the coordinates to position the label
+    #             textcoords="offset points", # how to position the text
+    #             xytext=(-10,-20)) # distance from text to points (x,y)
         
-        plt.title(directory.split('/')[-1]+str(model))
-        plt.show()
+    #     plt.title(directory.split('/')[-1]+str(model))
+    #     plt.show()
         
     return acc        
 
 # Getting the decoding accuracy for each algorithm
 # acc_Banditron = analysis('a', dir, files, 1, error, sparsity_rate, gamma=gamma)
-acc_Banditron = analysis('a', directory, files, 1, error=error, sparsity_rate=sparsity_rate, gamma=gamma)
-acc_BanditronRP = analysis('b', directory, files, 1, error=error, sparsity_rate=sparsity_rate, gamma=gamma)
+# acc_Banditron = analysis('a', directory, files, 1, error=error, sparsity_rate=sparsity_rate, gamma=gamma)
+# acc_BanditronRP = analysis('b', directory, files, 1, error=error, sparsity_rate=sparsity_rate, gamma=gamma)
 acc_HRL = analysis('c', directory, files, 1, muH=muH, muO=muO, num_nodes=num_nodes, error=error, sparsity_rate=sparsity_rate)
-acc_AGREL = analysis('d', directory, files, 1, gamma_AGREL=gamma_AGREL, alpha=alpha, beta=beta, num_nodes_AGREL=num_nodes_AGREL, error=error, sparsity_rate=sparsity_rate)
+# acc_AGREL = analysis('d', directory, files, 1, gamma_AGREL=gamma_AGREL, alpha=alpha, beta=beta, num_nodes_AGREL=num_nodes_AGREL, error=error, sparsity_rate=sparsity_rate)
 # acc_DQN = analysis('e', directory, files, 1, epsilon=epsilon, gamma_DQN=gamma_DQN, error=error, sparsity_rate=sparsity_rate)
 # acc_QLGBM = analysis('f', directory, files, 1, epsilon=epsilon, gamma_DQN=gamma_DQN, error=error, sparsity_rate=sparsity_rate)
 
