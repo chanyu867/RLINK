@@ -179,11 +179,123 @@ def make_mask(y, allowed_classes):
     mask = np.isin(y, allowed_classes)
     return mask
 
+
+
+def load_or_create_classes(finger_type, mode, boundaries, data_dir, classes_dir):
+    """
+    Loads or creates digitized classes for given finger(s) and mode, with metadata.
+
+    Args:
+        finger_type: "idx", "mrs", or "together"
+        mode: "position" or "velocity"
+        boundaries: list or array of bin edges
+        data_dir: directory with raw npy data
+        classes_dir: directory to save/load class arrays and metadata
+
+    Returns:
+        labels: (N,) array of class IDs
+        class_map: dict with {finger_type: {class_id: [low, high], ...}} 
+                   for single finger it's still wrapped in a dict
+    """
+    os.makedirs(classes_dir, exist_ok=True)
+    meta_dir = os.path.join(classes_dir, "metadata")
+    os.makedirs(meta_dir, exist_ok=True)
+
+    bin_str = "_".join([str(b) for b in boundaries])
+    labels_file = os.path.join(classes_dir, f"{finger_type}_{mode}_labels_{bin_str}.npy")
+    meta_file = os.path.join(meta_dir, f"{finger_type}_{mode}_meta_{bin_str}.npy")
+
+    if os.path.exists(labels_file) and os.path.exists(meta_file):
+        labels = np.load(labels_file)
+        class_map = np.load(meta_file, allow_pickle=True).item()
+        return labels, class_map
+
+    # --- create labels and metadata ---
+    if finger_type in ["idx", "mrs"]:
+        values = np.load(os.path.join(data_dir, f"{finger_type}_position_all.npy")).squeeze()
+        if mode != "position":
+            raise NotImplementedError(f"Mode '{mode}' not implemented yet")
+        labels, meta = discretize_position(values, boundaries)
+
+        # convert intervals to class_map format
+        class_map = {finger_type: {i: interval for i, interval in enumerate(meta["intervals"])}}
+
+    elif finger_type == "together":
+        # load both fingers
+        idx_values = np.load(os.path.join(data_dir, "idx_position_all.npy")).squeeze()
+        mrs_values = np.load(os.path.join(data_dir, "mrs_position_all.npy")).squeeze()
+
+        if mode != "position":
+            raise NotImplementedError(f"Mode '{mode}' not implemented yet")
+
+        idx_labels, idx_meta = discretize_position(idx_values, boundaries)
+        mrs_labels, mrs_meta = discretize_position(mrs_values, boundaries)
+
+        labels, _ = combine_finger_labels(idx_labels, mrs_labels, boundaries)
+
+        # class_map for each finger
+        class_map = {
+            "idx": {i: interval for i, interval in enumerate(idx_meta["intervals"])},
+            "mrs": {i: interval for i, interval in enumerate(mrs_meta["intervals"])}
+        }
+
+    else:
+        raise ValueError("finger_type must be 'idx', 'mrs', or 'together'")
+
+    # save for future use
+    np.save(labels_file, labels)
+    np.save(meta_file, class_map)
+
+    return labels, class_map
+
+
 if __name__ == "__main__":
 
-    # --- Examples ---
+    # --- Ultimate guide to loading the data ---
 
-    data_dir = "path_to_the_dir_w_full_npy_data"
+    data_dir = "path_to_the_dir_w_full_npy_data" # raw_npy folder in Google Drive
+    classes_dir = "path_to_the_dir_w_classes_data" # classes folder in Google Drive - will create metadata folder inside
+
+    finger_type = "idx" # "idx", "mrs", or "together"
+    mode = "position" # "position" or "velocity"
+    boundaries = [0.15, 0.85]
+
+    # 1. load array with classes
+    # labels is (N,) array of classes,
+    # class_map is a class description like {0: [0.0, 0.15], 1: [0.15, 0.85], 2: [0.85, 1.0]}
+    labels, class_map = load_or_create_classes(
+        finger_type = finger_type,
+        mode = mode,
+        boundaries = boundaries,
+        data_dir = data_dir,
+        classes_dir = classes_dir
+        )
+    
+    # 2. create mask and apply to all data necessary
+    mask = make_mask(labels, [0, 2]) # keep [0., 0.15] and [0.85, 1.]
+
+    sbp = np.load(f"{data_dir}/sbp_all.npy")
+    sbp_w_classes = assemble_features(neural_data=sbp, labels=labels) # add class as the last dimension
+    del sbp # be merciful to RAM, save it from keeping useless 5 GB
+
+    data = sbp_w_classes[mask] # apply mask
+    del sbp_w_classes
+
+    # same works for the additional data (here - stimulus onset)
+    stimulus_onset = np.load(f"{data_dir}/start_time_stop_time_all.npy")
+    stimulus_onset_masked = stimulus_onset[mask]
+    del stimulus_onset
+
+    # ta-da! that's it, the data is ready
+
+
+
+
+
+
+
+    # --- Examples for manual data handling ---
+
 
     # Example 1: one finger, keeps all the classes
     X, y, class_map = prepare_dataset_one_finger(
@@ -220,5 +332,3 @@ if __name__ == "__main__":
     # output:
     # (7711816, 97) (7711816,) (7711816, 2)
     # (1095899, 97) (1095899,) (1095899, 2)
-
-    
