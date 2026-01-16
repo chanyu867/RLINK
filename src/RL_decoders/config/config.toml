@@ -11,25 +11,24 @@ error = 0
 sparse_rate = 0
 
 [banditron] #banditron(X, y, error, sparse_rate, k, gamma)
-k = 2
-gamma = 0.0001
+gamma = 0.0000
 eta = 0.5
 
 [banditronRP] #banditronRP(X, y, error, sparse_rate, k, gamma)
 k = 128
-gamma = 0.0001
+gamma = 0.0000
 eta = 0.5
 
 [hrl]
 muH = 0.01
 muO = 0.01
-num_nodes = [95,3]
+num_nodes = [96,2]
 
 [agrel] #AGREL(X, y, error, sparse_rate, gamma, alpha, beta, num_nodes)
-gamma = 0.02
+gamma = 0.00
 alpha = 0.1
 beta = 0.1
-num_nodes = [95, 3, 5]
+num_nodes = [96, 3, 2]
 
 [dqn] #DQN(X,Y,error,sparse_rate,epsilon,gamma)
 epsilon = 0.01

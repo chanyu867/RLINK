@@ -44,82 +44,40 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--finger_ID', type = str, required=True)
 parser.add_argument('--sbp_path', type = str)
-parser.add_argument('--time_info_path', type = str)
+parser.add_argument('--day_info_path', type = str)
+parser.add_argument('--onset_path', type = str)
+parser.add_argument('--label_path', type = str)
+parser.add_argument('--label_mask', type = list, default=None)
+parser.add_argument('--shift', type = int, required=True)
+parser.add_argument('--mode', type = str, required=True)
+parser.add_argument('--shift_mask_path', type = str, required=True)
+parser.add_argument('--slicing_day', type = int, required=True)
 
 args = parser.parse_args()
 scaler = StandardScaler()
 
-def plot_performance_time(xs, accs, title=None, ylim=(0, 100), show_values=False):
-    plt.figure(figsize=(10, 5))
-    plt.plot(xs, accs, marker="o")
-    plt.grid(True)
-    plt.ylim(ylim)
-    plt.ylabel("Accuracy (%)")
-    plt.xlabel("Time (block index)")
-
-    if show_values:
-        for x, y in zip(xs, accs):
-            plt.annotate(f"{y:.2f}", (x, y), textcoords="offset points", xytext=(0, -12), ha="center")
-
-    if title:
-        plt.title(title)
-
-    plt.tight_layout()
-    plt.show()
-
-def accuracy_over_time(y_true, y_pred, temp_info, threshold=90):
+def accuracy_over_time(y_true, y_pred, day_info, threshold=0.9):
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
-    temp_info = np.asarray(temp_info)
+    days = np.asarray(day_info).astype(int)
 
-    days = temp_info[:, 1].astype(int)
-
-    xs, accs = [], []
+    xs, accs, day_to_accs = [], [], []
 
     for d in np.unique(days):  # unique days (sorted)
         idx = (days == d)
-        acc = float(np.mean(y_true[idx] == y_pred[idx])) * 100.0
+        acc = float(np.mean(y_true[idx] == y_pred[idx]))
+        acc_01 = (y_true[idx] == y_pred[idx]).astype(int)  # 0/1 series
+        
+        #register the info
         xs.append(int(d))          # x-axis: day number (e.g., 1, 37, ...)
         accs.append(acc)           # y-axis: accuracy (%) within that day
+        day_to_accs.append(acc_01)
 
     bad_days = days_below_threshold(xs, accs, threshold=threshold)
 
-    return xs, accs, bad_days
-
-
-def plot_samples_per_day(temp_info, sort=True, title="Samples per day"):
-    temp_info = np.asarray(temp_info)
-    days = temp_info[:, 1].astype(int)
-
-    uniq, counts = np.unique(days, return_counts=True)
-
-    if sort:
-        order = np.argsort(uniq)
-        uniq, counts = uniq[order], counts[order]
-
-    plt.figure()
-    plt.bar(uniq, counts)
-    plt.xlabel("Day")
-    plt.ylabel("Number of samples")
-    plt.title(title)
-    plt.tight_layout()
-    plt.show()
-
-def plot_performance_compare(xs, accs_list, labels, title=None, ylim=(0, 100)):
-    plt.figure(figsize=(10, 5))
-    for accs, lab in zip(accs_list, labels):
-        plt.plot(xs, accs, marker="o", label=lab)
-
-    plt.grid(True)
-    plt.ylim(ylim)
-    plt.ylabel("Accuracy (%)")
-    plt.xlabel("Time (block index)")
-    if title:
-        plt.title(title)
-    plt.legend()
-    plt.tight_layout()
-    plt.show()
+    return xs, accs, day_to_accs, bad_days
 
 def days_below_threshold(xs, accs, threshold):
     xs = np.asarray(xs)
@@ -148,80 +106,148 @@ def threshold_binary(x, thresh=0.85):
     return (x < thresh).astype(int)
 
 # original: for file in files: #this time program is done only for single .npy file
-def analysis(model_type, file_path, cfg=None, **kwargs):
+def analysis(model_type, sbp, cfg=None, output_dim=2, shift_mask=None, **kwargs):
 
     # 1) load data depending on given file format
     data_format = cfg.get("dataset").get("format")
     if data_format == "npy":
-        data = npy_loader(file_path)
-        X = data[:,:-1] #spike data
-        y = data[:,-1] #label data
+        X = sbp[:,:-1] #spike data
+        y = sbp[:,-1] #label data
         #convert position into binary labels
-        y = threshold_binary(y, thresh=0.85)
-    elif data_format == "mat":
-        from src.utils.mat_loader import load_feature_mat
-        data = load_feature_mat(file_path) #handle v7.3 files
-        logger.info(f"data keys are: {data.keys()}")
-        f"{model_type}: bad_dates: {bad_dates}, bad_days: {bad_days}"
-        feature_mat = data["feature_mat"] #error -> need to check the data
-        X = feature_mat[:,:-1] #22 channels data, just spike counts
-        y = feature_mat[:,-1]//90 #last part is the labels, 0, 90, 180 degrees -> ignore the stopping condition, for making it simple?
+        # y = threshold_binary(position, thresh=0.85)
     else:
         logger.error(f"{model_type} is not supported in this implementation")
         exit()
 
     # 2) retrieve necessary parameters depending on given model type
     from src.RL_decoders.build_params import build_params
-    params = build_params(model_type, cfg)
+    params = build_params(model_type, cfg, output_dim=output_dim)
     setting = params["setting"]
     logger.info(f"{model_type} will run with {setting}")
 
     # 3) load model
     model = load_model(model_type)
     # pred = model(X[:1000], y[:1000], **setting) #small run
-    pred = model(X, y, **setting)
+    pred, when_explore = model(X, y, **setting)
+    #(X, y, muH, muO, num_nodes, error, sparsity_rate)
+    #'error': 0, 'sparsity_rate': 0, 'muH': 0.01, 'muO': 0.01, 'num_nodes': [96, 3]
 
     # 4) accuracy
     y_true = (np.array(y)).astype(int)
     y_pred = (np.array(pred)).astype(int)
 
+    logger.info(f"model run done for {model_type}: %s %s %s %s", y_true.shape, y_pred.shape, y.shape, X.shape) #(7594816,) (7594816,) (7594816,) (7594816, 96)
+    
+    if when_explore is not None:
+        when_explore = (np.array(when_explore)).astype(int)
+
     # return acc        
-    return [y_true, y_pred]
+    return [y_true, y_pred], X, y, when_explore
+
+
+#    ------- main -------    #
 
 #1. load setting
 with open("src/RL_decoders/config/config.toml", "rb") as f: # Open in binary mode ('rb')
     config = tomli.load(f)
 
 #2. retrieve temporal info
-temp_info = npy_loader(path = args.time_info_path)
-temp_info = add_block_id(temp_info)
+day_info = npy_loader(path=args.day_info_path)
+# day_info = add_block_id(day_info) #-> when you apply mask for specific labels
 
-#3. run models
-accs_list = []
+#3. load stimulus onset info for all samples
+stimulus_onset = npy_loader(path=args.onset_path)
+
+#4. load SBP data
+sbp = npy_loader(path=args.sbp_path)
+
+#5. load label data (assume that user already defined the label data)
+from src.utils.data_loader import assemble_features, make_mask
+labels = npy_loader(path=args.label_path)
+labeled_sbp = assemble_features(neural_data=sbp, labels=labels) # add class as the last dimension
+del sbp # be merciful to RAM, save it from keeping useless 5 GB
+
+#6. masking for shifting
+if args.shift > 0:
+    time_within_trial = npy_loader("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_bin.npy")
+    shift_mask = npy_loader(args.shift_mask_path).astype(bool)
+    count_1 = time_within_trial[time_within_trial==0.0] #count how many trials are there
+    labeled_sbp = labeled_sbp[shift_mask]
+    labels = labels[shift_mask]
+    day_info = day_info[shift_mask]
+    logger.info("masking data for shift: %s %s %d", time_within_trial.shape, labeled_sbp.shape, time_within_trial.shape[0]-(len(count_1)*args.shift)) #(7711816,) (7360816,)
+else:
+    shift_mask = None
+
+#7. masking for specific days
+if args.slicing_day is not None:
+    day_mask = day_info[day_info>args.slicing_day]
+    labels = labels[day_mask]
+    day_info = day_info[day_mask]
+    labeled_sbp = labeled_sbp[day_mask]
+
+#8. masking for labels
+if args.label_mask is not None:
+    label_mask = make_mask(labels, args.label_mask) # keep [0., 0.15] and [0.85, 1.]
+    labeled_sbp = labeled_sbp[label_mask] # apply mask
+    stimulus_onset = stimulus_onset[label_mask]
+
+#9. validate data consistency
+if not (len(labels) == len(day_info) == len(labeled_sbp)):
+    logger.error(f"Data length mismatch: labels={len(labels)}, day_info={len(day_info)}, labeled_sbp={len(labeled_sbp)}")
+    exit()
+else:
+    logger.info("final data length: %d %d %d", len(labels), len(day_info), len(labeled_sbp))
+
+#10. run models
 models = ["banditron", "banditronRP", "HRL", "AGREL"]
-for model_type in models:
-    acc = analysis(model_type=model_type, file_path=args.sbp_path, cfg=config)
-    xs, accs, bad_days = accuracy_over_time(y_true=acc[0], y_pred=acc[1], temp_info=temp_info)
-    bad_dates = dates_from_days(bad_days, temp_info)
-    data = npy_loader(args.sbp_path)
-    accs_list.append(accs)
+# models = ["banditronRP"]
+output_dim = np.unique(labels).size
+logger.info("debug: output dim: %d", output_dim)
 
-    logger.info(f"{model_type}: bad_dates: {bad_dates}, bad_days: {bad_days}")
+for i in range(10): #testing different seeds
+    accs_list = []
+    np.random.seed(i)
+    logger.info(f"seed: {i}")
+    for model_type in models:
+        #1. run model on given data
+        acc, sbp, label, when_explore = analysis(model_type=model_type, sbp=labeled_sbp, cfg=config, output_dim=output_dim, shift_mask=shift_mask)
+        #2. calculate accuracy for normal setting(y_tilde)
+        xs, accs, day_to_accs, bad_days = accuracy_over_time(y_true=acc[0], y_pred=acc[1], day_info=day_info)
+        
+        results = {
+            "meta": {
+            "model_type": model_type,
+            "output_dim": output_dim,
+            "config": config,
+            },
 
-#4. plot comparison among all models
-plot_performance_compare(xs, accs_list, models, title="Model comparison", ylim=(20, 100))
+            "prediction": {
+            "y_true": acc[0],
+            "y_pred": acc[1],
+            "when_explore": when_explore,
+            },
 
-# plot_performance_time(xs, accs, title=f"{model_type}", ylim=(20, 100))
-# plot_samples_per_day(temp_info)
-# plot_blocks_and_avg_samples_per_block(temp_info)
-# heatmap_sbp_mean_by_electrode_day(data[:,:-1], temp_info, day_col=1)
+            "performance": {
+            "xs": xs,
+            "accs": accs, #basically trust this
+            "day_to_accs": day_to_accs,
+            "bad_days": bad_days,
+            }
+        }
+        
+        # 3. save all results
+        save_dir = f"/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/pred_results/{args.mode}/{output_dim}classes"
+        os.makedirs(save_dir, exist_ok=True)
+        np.save(f"{save_dir}/results_{args.finger_ID}_{model_type}_shift{args.shift}_seed{i}.npy", results, allow_pickle=True)
+
+        accs_list.append(accs)
+
+        logger.info(f"{model_type}: bad_days: {bad_days}")
+
+    # #4. plot comparison among all models
+    from src.utils.performance_plot import plot_performance_compare
+    plot_performance_compare(args.mode, args.finger_ID, args.shift, output_dim, i, xs, accs_list, models, ylim=(0, 1))
 
 # acc_DQN = analysis('e', directory, files, 1, epsilon=epsilon, gamma_DQN=gamma_DQN, error=error, sparsity_rate=sparsity_rate)
 # acc_QLGBM = analysis('f', directory, files, 1, epsilon=epsilon, gamma_DQN=gamma_DQN, error=error, sparsity_rate=sparsity_rate)
-
-#idx:
-# bad_dates:  [20210309, 20210312, 20210313, 20230113, 20230127]
-# bad_days:  [408, 411, 412, 1083, 1097]
-#mrs:
-# bad_dates:  [20210309, 20210312, 20210313, 20230113, 20230127]
-# bad_days:  [408, 411, 412, 1083, 1097]

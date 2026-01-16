@@ -4,7 +4,7 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-def build_params(model_type, cfg: dict) -> dict:
+def build_params(model_type, cfg: dict, output_dim) -> dict:
     params = {}
 
     # ---- common: run ----
@@ -36,13 +36,15 @@ def build_params(model_type, cfg: dict) -> dict:
     # ---- decoder-specific ----
     if model_type == "banditron":
         setting["gamma"] = cfg.get("banditron").get("gamma")
-        setting["k"] = cfg.get("banditron").get("k")
+        setting["k"] = output_dim
+        logger.info(f"Banditron - output_dim is defined as: {setting['k']}")
         if setting["gamma"] is None:
             raise ValueError("config missing: [banditron].gamma")
         setting["gamma"] = float(setting["gamma"])
     elif model_type == "banditronRP":
         setting["gamma"] = cfg.get("banditron").get("gamma")
-        setting["k"] = cfg.get("banditron").get("k")
+        setting["k"] = output_dim
+        logger.info(f"BanditronRP - output_dim is defined as: {setting['k']}")
         if setting["gamma"] is None:
             raise ValueError("config missing: [banditron].gamma")
         setting["gamma"] = float(setting["gamma"])
@@ -51,6 +53,8 @@ def build_params(model_type, cfg: dict) -> dict:
         setting["muH"] = cfg.get("hrl").get("muH")
         setting["muO"] = cfg.get("hrl").get("muO")
         setting["num_nodes"] = cfg.get("hrl").get("num_nodes")
+        setting["num_nodes"][-1] = output_dim #change to output_dim depending on used labels
+        logger.info(f"HRL - output_dim is defined as: {setting['num_nodes']}")
 
         if setting["muH"] is None or setting["muO"] is None or setting["num_nodes"] is None:
             raise ValueError("config missing: [hrl].muH, [hrl].muO, [hrl].num_nodes")
@@ -63,7 +67,9 @@ def build_params(model_type, cfg: dict) -> dict:
         setting["alpha"] = float(cfg.get("agrel").get("alpha", 0.1))
         setting["beta"] = float(cfg.get("agrel").get("beta", 0.1))
         setting["gamma"] = float(cfg.get("agrel").get("gamma", 0.02))
-        setting["num_nodes"] = list(cfg.get("agrel").get("num_nodes", [1000, 4]))
+        setting["num_nodes"] = list(cfg.get("agrel").get("num_nodes"))
+        setting["num_nodes"][-1] = output_dim #change to output_dim depending on used labels
+        logger.info(f"AGREL - output_dim is defined as: {setting['num_nodes']}")
 
     elif model_type == "DQN":
         setting["epsilon"] = cfg.get("dqn").get("epsilon")

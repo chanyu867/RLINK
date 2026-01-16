@@ -52,38 +52,48 @@ def banditron(X, y, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The 
     #1. retrieve params:
     T = X.shape[0] 
     d = X.shape[1]
-    np.random.seed(100)
     W = np.zeros((k, d)) # Initializing the Weight Matrix. W=(4,d), d is depending on the data. k=number of classes
     
     error_count = np.zeros(T) 
     pred = [] # The predicted labels will be stored here
+    when_explore = []
 
     # 2. Evaluative framework (refer to the paper to understand the mathematics)
     for t in range(T):
-        # gamma = gammas[t]
-        y_hat = np.argmax(np.dot(W, X[t]))
+        # gamma = gammas[t]  -> author tried dynamic exploit rates?
+
+        #1. define even probability distribution across all classes
         p = [gamma/k for i in range(k)]
+        #2. infer class and retrieve the index for the label
+        y_hat = np.argmax(np.dot(W, X[t]))
+        #3. add the bias for selected label by the current model
         p[y_hat] = p[y_hat] + 1 - gamma
+        #4. choose actual label for the output depending on the probability distribution
         y_tilde = np.random.choice(range(k), p=p)
+        #5. save predicted label for both explored label and greedy label
         pred.append(y_tilde)
-        sparsify = np.random.choice([True,False],p=[sparsity_rate,1-sparsity_rate])
+
+        when_explore.append(int(y_tilde != y_hat))
+        # print(f"probability for each classes: {p}, y_tilde={y_tilde}, y_hat: {y_hat}")
+        
+        sparsify = np.random.choice([True,False],p=[sparsity_rate,1-sparsity_rate]) #decide if we do weights update
         if not sparsify:
-          if y_tilde != y[t]:
+          if y_tilde != y[t]: #if actually selected label is incorrect
             choice = np.random.choice(range(2),p=[error,1-error])
             if choice == 1:
-              W[y_hat] = W[y_hat] - X[t]   
+              W[y_hat] = W[y_hat] - X[t] #correct update: only weaken greedy label (according to perceptron update rules) 
             else:
-              W[y_hat] = W[y_hat] - X[t]
-              W[y_tilde] = W[y_tilde] + X[t] / p[y_tilde]         
-          else:
+              W[y_hat] = W[y_hat] - X[t] #error update: strengthen explored label even it was incorrect
+              W[y_tilde] = W[y_tilde] + X[t] / p[y_tilde]      
+          else: #if actually selected label is correct
             choice = np.random.choice(range(2),p=[error,1-error])
             if choice == 1:
-              W[y_hat] = W[y_hat] - X[t]
+              W[y_hat] = W[y_hat] - X[t] #correct update: weaken greedy label and strengthen the explored label
               W[y_tilde] = W[y_tilde] + X[t] / p[y_tilde]
             else:
-              W[y_hat] = W[y_hat] - X[t]   
+              W[y_hat] = W[y_hat] - X[t] #incorrect update: don't update correct explored label, only incorrect greedy label
 
-    return pred
+    return pred, when_explore
 
 # Defining the Banditron-RP Function (Three Layered Network)
 '''
@@ -97,8 +107,8 @@ def banditronRP(X, y, error, sparsity_rate, k, gamma):
     d = X.shape[1]
     Wrand = np.random.uniform(size=(k,d)) # The random Weight matrix generated from a normal distribution.
     f = sigmoid(np.dot(Wrand,X.T)) # The non-linear projection vector input to the hidden layer.
-    pred = banditron(f.T, y, error, sparsity_rate, k=2, gamma=gamma) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
-    return pred
+    pred, when_explore = banditron(f.T, y, error, sparsity_rate, k=2, gamma=gamma) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
+    return pred, when_explore
 
 # Defining the HRL function (Three Layered Network)
 # Initializing the weight matrices
@@ -120,21 +130,30 @@ and y denotes the true labels associated with each observation (X)
 '''  
 def HRL(X, y, muH, muO, num_nodes, error, sparsity_rate):
     T = X.shape[0]
-    W = [0]*(len(num_nodes)-1)
+    W = [0]*(len(num_nodes)-1) #here W is just one dimension list
     pred = []
     num_nodes[0] = num_nodes[0]+1
+
+    # print("W: ", np.array(W).shape, num_nodes) #(1,) [97, 2](original is [96, 2])
     
     # Initializing the weight matrices.
     for i in range(1,len(num_nodes)):
-      W[i-1] = initialize(num_nodes[i-1],num_nodes[i])
+      W[i-1] = initialize(num_nodes[i-1],num_nodes[i]) #give initial weight ranging from -1 to 1, return 2d list
+      # print("W: ", i, np.array(W).shape, num_nodes) #(2, 97) [97, 2]
+
+    # print("weight side for Hebbian RL: ", np.array(W).shape) #(2, 97), additional 1 is just due to numpy format?
+    # print(W[0].shape) #(2, 97)
+    # print("len(W) =", len(W))
+    # for li, Wi in enumerate(W):
+    #     print(f"W[{li}].shape =", np.array(Wi).shape)
     
     # Computing the output for the hidden layer and output layer.
     for t in range(T):
-      x = np.insert(X[t],0,1) #increase shape here
-      out = [x.reshape(-1,1)]*(len(num_nodes))     
-      # print("X shape:", x.reshape(-1,1).shape, num_nodes, np.array(W).shape) #X shape: (96, 1) 2 (1, 3, 23)
+      x = np.insert(X[t],0,1) #increase shape here, adding bias as constantly 1
+      out = [x.reshape(-1,1)]*(len(num_nodes)) #-> (97, 1)*2 = (2, 97)
       for i in range(1,len(num_nodes)):
-        out[i] = np.tanh(np.dot(W[i-1],out[i-1]))
+        out[i] = np.tanh(np.dot(W[i-1],out[i-1])) #-> (2, 97)*(97, 1) -> (2,1)
+        # print("np.tanh(np.dot(W[i-1],out[i-1])): ", out[i-1].shape, np.tanh(np.dot(W[i-1],out[i-1]))) #-> (2,1), [[-0.99991325] [ 0.99999999]]
       
       # Evaluative framework (refer to the paper to understand the mathematics)
       out[-1] = np.tanh(np.dot(W[-1],np.sign(out[-2])))
@@ -155,7 +174,8 @@ def HRL(X, y, muH, muO, num_nodes, error, sparsity_rate):
         W[-1] = W[-1] + dW[-1]
 
       pred.append(yhat)
-    return pred
+      
+    return pred, None
 
 # Defining the AGREL function (Three Layered Network)
 # Initializing the weight matrices
@@ -179,9 +199,13 @@ def AGREL(X, y, error, sparsity_rate, gamma, alpha, beta, num_nodes):
     T = X.shape[0]
     pred = []
     
+
+    when_explore = []
     # Initializing the weight matrices.
     W_H = initialize(num_nodes[0]+1,num_nodes[1])
     W_O = initialize(num_nodes[1],num_nodes[2])
+
+    
 
     for t in range(T):
       x = np.insert(X[t],0,1).reshape(-1,1) 
@@ -194,7 +218,7 @@ def AGREL(X, y, error, sparsity_rate, gamma, alpha, beta, num_nodes):
       outs = np.zeros(Z.shape)
       outs[yhat] = 1
       explore = np.random.uniform()<gamma 
-      
+      when_explore.append(explore)
       # Evaluative framework (refer to the paper to understand the mathematics)
       if explore:
         y_tilde = np.random.randint(low=0,high=num_nodes[-1])
@@ -225,7 +249,7 @@ def AGREL(X, y, error, sparsity_rate, gamma, alpha, beta, num_nodes):
         W_H = W_H + dW_H
         
       pred.append(yhat)
-    return pred
+    return pred, when_explore
 
 # Defining the DQN function (Four Layered Network)
 # Defining the DQN model
@@ -236,7 +260,7 @@ following function sequentially builds the model, where the output layer has 4 c
 and the two hidden layers has 128 neurons.
 '''
 def get_DQN_model(inp_shp, lr=0.01):
-  np.random.seed(101)
+  # np.random.seed(101)
   model = Sequential()
   model.add(Dense(128, activation='relu', input_shape=(inp_shp,))) # hidden layer1 neurons = 128
   model.add(Dense(128, activation='relu')) # hidden layer2 neurons = 128
@@ -320,7 +344,7 @@ def QLGBM(X,Y,epsilon,gamma,error,sparsity_rate):
     if isFit:
       Q = model.predict(x)
     else:
-      np.random.seed(101)
+      # np.random.seed(101)
       Q = np.random.uniform(low=-1,high=1,size=(2,4))
     yhat = np.argmax(Q[0,:])
     explore = np.random.uniform() < epsilon
