@@ -44,7 +44,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--update_W', type=bool, action='store_true')
+parser.add_argument('--update_W', action='store_true')
 parser.add_argument('--toml_path', type = str, required=True)
 parser.add_argument('--finger_ID', type = str, required=True)
 parser.add_argument('--sbp_path', type = str)

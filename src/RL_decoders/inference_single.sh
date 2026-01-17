@@ -12,6 +12,7 @@ shift_mask_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/classes_di
 
 
 python -m src.RL_decoders.position_decoder \
+    --update_W \
     --sbp_path ${sbp_path} \
     --toml_path "/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/RLINK/src/RL_decoders/config/config_exp.toml" \
     --day_info_path ${day_info_path} \
