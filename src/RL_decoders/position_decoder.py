@@ -44,6 +44,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--update_W', type=bool, action='store_true')
 parser.add_argument('--toml_path', type = str, required=True)
 parser.add_argument('--finger_ID', type = str, required=True)
 parser.add_argument('--sbp_path', type = str)
@@ -236,8 +237,10 @@ for i in range(10): #testing different seeds
             logger.info("RUNNING for: %s", expected_path)
 
         #2. run model if the result is not existing
-        # acc, sbp, label, when_explore = run_decoder(X, y, model, None, **setting)
-        acc, sbp, label, when_explore = run_decoder(X, y, model, day_info, **setting)
+        if args.update_W:
+            acc, sbp, label, when_explore = run_decoder(X, y, model, day_info, **setting)
+        else:
+            acc, sbp, label, when_explore = run_decoder(X, y, model, None, **setting)
 
         #3. calculate accuracy for normal setting(y_tilde)
         xs, accs, day_to_accs, bad_days = accuracy_over_time(y_true=acc[0], y_pred=acc[1], day_info=day_info)
