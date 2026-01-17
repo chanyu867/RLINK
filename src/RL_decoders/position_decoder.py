@@ -129,10 +129,10 @@ def preprocess(model_type, sbp, cfg=None, output_dim=2, **kwargs):
 
     return X, y, model, setting
 
-def run_decoder(X, y, model, **setting):
+def run_decoder(X, y, model, day_info, **setting):
 
     #1. run model
-    pred, when_explore, gamma = model(X, y, **setting)
+    pred, when_explore, gamma = model(X, y, day_info, **setting)
 
     #2. convert data type
     y_true = (np.array(y)).astype(int)
@@ -236,7 +236,8 @@ for i in range(10): #testing different seeds
             logger.info("RUNNING for: %s", expected_path)
 
         #2. run model if the result is not existing
-        acc, sbp, label, when_explore = run_decoder(X, y, model, **setting)
+        # acc, sbp, label, when_explore = run_decoder(X, y, model, None, **setting)
+        acc, sbp, label, when_explore = run_decoder(X, y, model, day_info, **setting)
 
         #3. calculate accuracy for normal setting(y_tilde)
         xs, accs, day_to_accs, bad_days = accuracy_over_time(y_true=acc[0], y_pred=acc[1], day_info=day_info)

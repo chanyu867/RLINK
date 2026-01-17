@@ -36,6 +36,7 @@ from sklearn.multioutput import MultiOutputRegressor
 
 from scipy.special import expit as sigmoid
 from scipy.special import softmax
+import logging
 
 # Defining the Banditron Function (Single Layered Network)
 '''
@@ -45,7 +46,12 @@ paper to understand the physical significance). k denotes the number of classes 
 fixed at 4 for our experiments. X denotes the spike count data (observation -- input dataset) 
 and y denotes the true labels associated with each observation (X) 
 '''
-def banditron(X, y, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The exploration exploitation constant and eta are given as optional arguments.
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
+
+def banditron(X, y, day_info, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The exploration exploitation constant and eta are given as optional arguments.
     #(a) turning 90o right, (b) moving forward by 2 m, (c) turning 90o left, and (d) staying still for 5 seconds (stop task)
     #k is originally 4
     
@@ -61,6 +67,11 @@ def banditron(X, y, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The 
     # 2. Evaluative framework (refer to the paper to understand the mathematics)
     for t in range(T):
         # gamma = gammas[t]  -> author tried dynamic exploit rates?
+
+        #0. initialize if day_info is given:
+        if day_info is not None and t > 0 and day_info[t] != day_info[t-1]:
+            W = np.zeros((k, d))
+            logger.info(f"[Banditron/BanditronRP] - Day change detected at t={t}: {day_info[t-1]} -> {day_info[t]}, resetting weights")
 
         #1. define even probability distribution across all classes
         p = [gamma/k for i in range(k)]
@@ -103,11 +114,11 @@ paper to understand the physical significance). k denotes the number of classes 
 fixed at 4 for our experiments. X denotes the spike count data (observation -- input dataset) 
 and y denotes the true labels associated with each observation (X) 
 '''
-def banditronRP(X, y, error, sparsity_rate, k, gamma):
+def banditronRP(X, y, day_info, error, sparsity_rate, k, gamma):
     d = X.shape[1]
     Wrand = np.random.uniform(size=(k,d)) # The random Weight matrix generated from a normal distribution.
     f = sigmoid(np.dot(Wrand,X.T)) # The non-linear projection vector input to the hidden layer.
-    pred, when_explore, gamma = banditron(f.T, y, error, sparsity_rate, k=2, gamma=gamma) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
+    pred, when_explore, gamma = banditron(f.T, y, day_info, error, sparsity_rate, k=2, gamma=gamma) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
     return pred, when_explore, gamma
 
 # Defining the HRL function (Three Layered Network)
@@ -128,7 +139,7 @@ denotes the learning rates corresponding to the weight updation policy. num_node
 the number of hidden nodes and output nodes. X denotes the spike count data (observation -- input dataset) 
 and y denotes the true labels associated with each observation (X) 
 '''  
-def HRL(X, y, muH, muO, num_nodes, error, sparsity_rate):
+def HRL(X, y, day_info, muH, muO, num_nodes, error, sparsity_rate):
     T = X.shape[0]
     W = [0]*(len(num_nodes)-1) #here W is just one dimension list
     pred = []
@@ -195,7 +206,7 @@ denotes the learning rates corresponding to the weight updation policy. num_node
 the number of hidden nodes and output nodes. gamma denotes the exploration-exploitation trade-off. 
 X denotes the spike count data (observation -- input dataset) and y denotes the true labels associated with each observation (X) 
 ''' 
-def AGREL(X, y, error, sparsity_rate, gamma, alpha, beta, num_nodes):
+def AGREL(X, y, day_info, error, sparsity_rate, gamma, alpha, beta, num_nodes):
     T = X.shape[0]
     pred = []
     
@@ -208,6 +219,11 @@ def AGREL(X, y, error, sparsity_rate, gamma, alpha, beta, num_nodes):
     
 
     for t in range(T):
+
+      if day_info is not None and t > 0 and day_info[t] != day_info[t-1]:
+        W_H = initialize(num_nodes[0]+1,num_nodes[1])
+        W_O = initialize(num_nodes[1],num_nodes[2])
+      
       x = np.insert(X[t],0,1).reshape(-1,1) 
       y_H = sigmoid(np.dot(W_H,x))
       Z = np.dot(W_O,y_H)
