@@ -93,7 +93,7 @@ def banditron(X, y, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The 
             else:
               W[y_hat] = W[y_hat] - X[t] #incorrect update: don't update correct explored label, only incorrect greedy label
 
-    return pred, when_explore
+    return pred, when_explore, gamma
 
 # Defining the Banditron-RP Function (Three Layered Network)
 '''
@@ -107,8 +107,8 @@ def banditronRP(X, y, error, sparsity_rate, k, gamma):
     d = X.shape[1]
     Wrand = np.random.uniform(size=(k,d)) # The random Weight matrix generated from a normal distribution.
     f = sigmoid(np.dot(Wrand,X.T)) # The non-linear projection vector input to the hidden layer.
-    pred, when_explore = banditron(f.T, y, error, sparsity_rate, k=2, gamma=gamma) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
-    return pred, when_explore
+    pred, when_explore, gamma = banditron(f.T, y, error, sparsity_rate, k=2, gamma=gamma) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
+    return pred, when_explore, gamma
 
 # Defining the HRL function (Three Layered Network)
 # Initializing the weight matrices
@@ -175,7 +175,7 @@ def HRL(X, y, muH, muO, num_nodes, error, sparsity_rate):
 
       pred.append(yhat)
       
-    return pred, None
+    return pred, None, None
 
 # Defining the AGREL function (Three Layered Network)
 # Initializing the weight matrices
@@ -249,7 +249,7 @@ def AGREL(X, y, error, sparsity_rate, gamma, alpha, beta, num_nodes):
         W_H = W_H + dW_H
         
       pred.append(yhat)
-    return pred, when_explore
+    return pred, when_explore, gamma
 
 # Defining the DQN function (Four Layered Network)
 # Defining the DQN model

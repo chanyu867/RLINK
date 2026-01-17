@@ -350,7 +350,7 @@ def plot_block_performance(acc, block_size=500, title=None):
     plt.show()
 
 
-def plot_performance_compare(mode, finger_ID, shift, k, seed, xs, accs_list, labels, ylim=(0, 1)):
+def plot_performance_compare(expected_fig_path, title, xs, accs_list,labels, ylim=(0, 1)):
     plt.figure(figsize=(10, 5))
     for accs, lab in zip(accs_list, labels):
         plt.plot(xs, accs, marker="o", label=lab)
@@ -359,13 +359,11 @@ def plot_performance_compare(mode, finger_ID, shift, k, seed, xs, accs_list, lab
     plt.ylim(ylim)
     plt.ylabel("Accuracy (%)")
     plt.xlabel("Time (block index)")
-    plt.title(f"task: {mode} - {finger_ID}_{k}class_shift{shift}_seed{seed}")
+    plt.title(title)
     plt.legend()
     plt.tight_layout()
 
     #make sure directory is existing
-    save_dir = f"/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/performance/{mode}/{k}classes"
-    os.makedirs(save_dir, exist_ok=True)
-    plt.savefig(f"{save_dir}/{finger_ID}_shift{shift}_seed{seed}.png")
+    plt.savefig(expected_fig_path)
     plt.close()
     # plt.show()

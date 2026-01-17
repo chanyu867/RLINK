@@ -44,6 +44,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--toml_path', type = str, required=True)
 parser.add_argument('--finger_ID', type = str, required=True)
 parser.add_argument('--sbp_path', type = str)
 parser.add_argument('--day_info_path', type = str)
@@ -106,15 +107,13 @@ def threshold_binary(x, thresh=0.85):
     return (x < thresh).astype(int)
 
 # original: for file in files: #this time program is done only for single .npy file
-def analysis(model_type, sbp, cfg=None, output_dim=2, shift_mask=None, **kwargs):
+def preprocess(model_type, sbp, cfg=None, output_dim=2, **kwargs):
 
     # 1) load data depending on given file format
     data_format = cfg.get("dataset").get("format")
     if data_format == "npy":
         X = sbp[:,:-1] #spike data
         y = sbp[:,-1] #label data
-        #convert position into binary labels
-        # y = threshold_binary(position, thresh=0.85)
     else:
         logger.error(f"{model_type} is not supported in this implementation")
         exit()
@@ -127,16 +126,19 @@ def analysis(model_type, sbp, cfg=None, output_dim=2, shift_mask=None, **kwargs)
 
     # 3) load model
     model = load_model(model_type)
-    # pred = model(X[:1000], y[:1000], **setting) #small run
-    pred, when_explore = model(X, y, **setting)
-    #(X, y, muH, muO, num_nodes, error, sparsity_rate)
-    #'error': 0, 'sparsity_rate': 0, 'muH': 0.01, 'muO': 0.01, 'num_nodes': [96, 3]
 
-    # 4) accuracy
+    return X, y, model, setting
+
+def run_decoder(X, y, model, **setting):
+
+    #1. run model
+    pred, when_explore, gamma = model(X, y, **setting)
+
+    #2. convert data type
     y_true = (np.array(y)).astype(int)
     y_pred = (np.array(pred)).astype(int)
 
-    logger.info(f"model run done for {model_type}: %s %s %s %s", y_true.shape, y_pred.shape, y.shape, X.shape) #(7594816,) (7594816,) (7594816,) (7594816, 96)
+    logger.info(f"model run done for {model_type} with gamma{gamma}: %s %s %s %s", y_true.shape, y_pred.shape, y.shape, X.shape) #(7594816,) (7594816,) (7594816,) (7594816, 96)
     
     if when_explore is not None:
         when_explore = (np.array(when_explore)).astype(int)
@@ -145,10 +147,16 @@ def analysis(model_type, sbp, cfg=None, output_dim=2, shift_mask=None, **kwargs)
     return [y_true, y_pred], X, y, when_explore
 
 
+def build_result_path(save_dir, finger_ID, model_type, shift, seed, gamma):
+    return os.path.join(
+        save_dir,
+        f"results_{finger_ID}_{model_type}_shift{shift}_seed{seed}_gamma{gamma}.npy"
+    )
+
 #    ------- main -------    #
 
 #1. load setting
-with open("src/RL_decoders/config/config.toml", "rb") as f: # Open in binary mode ('rb')
+with open(args.toml_path, "rb") as f: # Open in binary mode ('rb')
     config = tomli.load(f)
 
 #2. retrieve temporal info
@@ -181,7 +189,7 @@ else:
 
 #7. masking for specific days
 if args.slicing_day is not None:
-    day_mask = day_info[day_info>args.slicing_day]
+    day_mask = day_info>args.slicing_day
     labels = labels[day_mask]
     day_info = day_info[day_mask]
     labeled_sbp = labeled_sbp[day_mask]
@@ -203,18 +211,37 @@ else:
 models = ["banditron", "banditronRP", "HRL", "AGREL"]
 # models = ["banditronRP"]
 output_dim = np.unique(labels).size
-logger.info("debug: output dim: %d", output_dim)
+logger.info("debug: output dim: %d %d", output_dim, args.shift)
 
 for i in range(10): #testing different seeds
     accs_list = []
     np.random.seed(i)
-    logger.info(f"seed: {i}")
+
+    logger.info(f"seed: {i}, shift: {args.shift}, labels: {args.label_path}")
+
     for model_type in models:
-        #1. run model on given data
-        acc, sbp, label, when_explore = analysis(model_type=model_type, sbp=labeled_sbp, cfg=config, output_dim=output_dim, shift_mask=shift_mask)
-        #2. calculate accuracy for normal setting(y_tilde)
+
+        #0. prepare for model
+        X, y, model, setting = preprocess(model_type=model_type, sbp=labeled_sbp, cfg=config, output_dim=output_dim)
+        
+        #1. check whether the current setting is already done
+        save_dir = f"/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/pred_results/{args.mode}/{output_dim}classes"
+        os.makedirs(save_dir, exist_ok=True)
+        expected_path = build_result_path(save_dir, args.finger_ID, model_type, shift=args.shift, seed=i, gamma=setting.get("gamma", None))
+        logger.info("expected path: %s", expected_path)
+        if os.path.exists(expected_path):
+            logger.info("SKIP (already exists): %s", expected_path)
+            continue
+        else:
+            logger.info("RUNNING for: %s", expected_path)
+
+        #2. run model if the result is not existing
+        acc, sbp, label, when_explore = run_decoder(X, y, model, **setting)
+
+        #3. calculate accuracy for normal setting(y_tilde)
         xs, accs, day_to_accs, bad_days = accuracy_over_time(y_true=acc[0], y_pred=acc[1], day_info=day_info)
         
+        # 4. save all results
         results = {
             "meta": {
             "model_type": model_type,
@@ -236,18 +263,23 @@ for i in range(10): #testing different seeds
             }
         }
         
-        # 3. save all results
-        save_dir = f"/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/pred_results/{args.mode}/{output_dim}classes"
-        os.makedirs(save_dir, exist_ok=True)
-        np.save(f"{save_dir}/results_{args.finger_ID}_{model_type}_shift{args.shift}_seed{i}.npy", results, allow_pickle=True)
+        np.save(expected_path, results, allow_pickle=True)
 
         accs_list.append(accs)
 
         logger.info(f"{model_type}: bad_days: {bad_days}")
 
     # #4. plot comparison among all models
-    from src.utils.performance_plot import plot_performance_compare
-    plot_performance_compare(args.mode, args.finger_ID, args.shift, output_dim, i, xs, accs_list, models, ylim=(0, 1))
+    # fig_save_dir = f"/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/performance/{args.mode}/{output_dim}classes"
+    # os.makedirs(fig_save_dir, exist_ok=True)
+    # expected_fig_path = os.path.join(fig_save_dir, f"{args.finger_ID}_shift{args.shift}_seed{i}_gamma{setting.get('gamma', None)}.png")
+    # title=f"task: {args.mode} - {args.finger_ID}_{output_dim}class_shift{args.shift}_seed{i}_gamma{setting.get('gamma', None)}"
+    # if not expected_fig_path: #one model done mean all models also done
+    #     from src.utils.performance_plot import plot_performance_compare
+    #     #last gamma will be used for plot title
+    #     plot_performance_compare(expected_fig_path, title, xs, accs_list, labels, ylim=(0, 1))
 
+    logger.info("NEWLY calculated for seed: %d", i)
+    logger.info("=" * 80)
 # acc_DQN = analysis('e', directory, files, 1, epsilon=epsilon, gamma_DQN=gamma_DQN, error=error, sparsity_rate=sparsity_rate)
 # acc_QLGBM = analysis('f', directory, files, 1, epsilon=epsilon, gamma_DQN=gamma_DQN, error=error, sparsity_rate=sparsity_rate)

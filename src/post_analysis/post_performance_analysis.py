@@ -1,14 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
-
-import numpy as np
+import os, re, glob
 import matplotlib.pyplot as plt
 import colorsys
-
-import numpy as np
 from scipy.stats import spearmanr
-
+from matplotlib.animation import FFMpegWriter
 
 def spearman_top_quantile(collected, model, delta_thr=0.1, min_n=20):
 
@@ -25,7 +21,7 @@ def spearman_top_quantile(collected, model, delta_thr=0.1, min_n=20):
         return {"model": model, "delta_thr": delta_thr, "rho": np.nan, "p": np.nan, "n": int(mask.sum())}
 
     rho, p = spearmanr(dpos[mask], dacc[mask])
-    
+
     return {"model": model, "delta_thr": float(delta_thr), "rho": float(rho), "p": float(p), "n": int(mask.sum())}
 
 
@@ -330,6 +326,258 @@ def stability_metrics_from_collected(collected, model, include_boundary=False, e
         "include_boundary": bool(include_boundary),
     }
 
+def models_daily_mean_std(results_dir, finger, shift, models=None, gamma_mode="ALL", ylim=(0,1), ax=None):
+    """
+    gamma_mode:
+      - True  : use gamma!=0 files; exclude HRL (gamma=None)
+      - None  : use gamma==0 files; include HRL
+      - "ALL" : ignore gamma; include all files
+    Prints final used files for this (finger, shift, gamma_mode).
+    """
+    if ax is None:
+        ax = plt.gca()
+    if models is None:
+        models = ["banditron", "banditronRP", "HRL", "AGREL"]
+
+    pat = re.compile(r"results_(?P<finger>[^_]+)_(?P<model>[^_]+)_shift(?P<shift>-?\d+)_seed(?P<seed>\d+)_gamma(?P<gamma>.+)\.npy$")
+    files = sorted(glob.glob(os.path.join(results_dir, "results_*.npy")))
+
+    # model -> list of (path, day_dict)
+    runs = {m: [] for m in models}
+
+    for f in files:
+        m = pat.match(os.path.basename(f))
+        if not m:
+            continue
+        gd = m.groupdict()
+        if gd["finger"] != finger or int(gd["shift"]) != int(shift):
+            continue
+        model = gd["model"]
+        if model not in runs:
+            continue
+
+        # gamma filtering
+        if gamma_mode != "ALL":
+            if model == "HRL":
+                if gamma_mode is True:   # gamma!=0 mode => exclude HRL
+                    continue
+                # gamma==0 mode (None) => include HRL
+            else:
+                try:
+                    gval = float(gd["gamma"])  # "0.00" or "0.0000" -> 0.0
+                except Exception:
+                    continue
+                if gamma_mode is True and gval == 0.0:
+                    continue
+                if gamma_mode is None and gval != 0.0:
+                    continue
+
+        res = np.load(f, allow_pickle=True).item()
+        d = res["performance"]["day_to_accs"]
+
+        day_dict = {}
+        items = d.items() if isinstance(d, dict) else enumerate(d)
+        for k, v in items:
+            v = float(np.nanmean(np.asarray(v, dtype=float))) if isinstance(v, (list, tuple, np.ndarray)) else float(v)
+            day_dict[int(k)] = v
+
+        runs[model].append((f, day_dict))
+
+    # print used files (required)
+    mode_str = "ALL" if gamma_mode == "ALL" else ("gamma!=0" if gamma_mode is True else "gamma==0 (+HRL)")
+    print(f"\nUsed files | finger={finger}, shift={shift}, gamma_mode={mode_str}")
+    for model in models:
+        paths = [p for p, _ in runs[model]]
+        print(f"{model}: {len(paths)} files")
+        for p in paths:
+            print("  -", p)
+
+    # plot
+    ax.clear()
+    any_plotted = False
+
+    for model in models:
+        day_dicts = [dd for _, dd in runs[model]]
+        if not day_dicts:
+            continue
+
+        days = sorted({day for dd in day_dicts for day in dd.keys()})
+        means, stds = [], []
+
+        for day in days:
+            vals = [dd[day] for dd in day_dicts if day in dd and np.isfinite(dd[day])]
+            if len(vals) == 0:
+                means.append(np.nan); stds.append(np.nan)
+            elif len(vals) == 1:
+                means.append(float(vals[0])); stds.append(0.0)
+            else:
+                means.append(float(np.mean(vals)))
+                stds.append(float(np.std(vals, ddof=1)))
+
+        x = np.array(days)
+        y = np.array(means, float)
+        s = np.array(stds, float)
+        ok = np.isfinite(y)
+
+        ax.plot(x[ok], y[ok], label=f"{model} (n={len(day_dicts)} files)")
+        ax.fill_between(x[ok], y[ok]-s[ok], y[ok]+s[ok], alpha=0.2)
+        any_plotted = True
+
+    ax.set_xlabel("Day")
+    ax.set_ylabel("Accuracy")
+    ax.set_ylim(*ylim)
+    ax.grid(alpha=0.3)
+    ax.set_title(f"finger={finger}, shift={shift}, gamma_mode={mode_str}")
+    if any_plotted:
+        ax.legend(fontsize=8)
+    else:
+        ax.text(0.5, 0.5, "No matching files", ha="center", va="center", transform=ax.transAxes)
+
+
+def plot_4models_daily_mean_std(results_dir, finger, shift, models, gamma_mode=None, ylim=(0,1), title=None):
+    """
+    Simple version.
+    - Split by gamma==0 vs gamma!=0 (gamma parsed from filename and converted to float).
+    - HRL is treated as gamma=None and included ONLY when gamma_nonzero=False.
+    - Prints the final files used for each model.
+    """
+    pat = re.compile(r"results_(?P<finger>[^_]+)_(?P<model>[^_]+)_shift(?P<shift>-?\d+)_seed(?P<seed>\d+)_gamma(?P<gamma>.+)\.npy$")
+
+    runs = {m: [] for m in models}  # model -> list of (path, day_dict)
+
+    for f in sorted(glob.glob(os.path.join(results_dir, "results_*.npy"))):
+        m = pat.match(os.path.basename(f))
+        if not m:
+            continue
+        gd = m.groupdict()
+        if gd["finger"] != finger or int(gd["shift"]) != int(shift):
+            continue
+
+        model = gd["model"]
+        if model not in runs:
+            continue
+
+        # gamma filter
+        if gamma_mode != "ALL":
+            if model == "HRL":
+                if gamma_mode is True:   # gamma!=0 mode excludes HRL
+                    continue
+                # gamma==0 mode includes HRL
+            else:
+                try:
+                    gval = float(gd["gamma"])  # "0.00" -> 0.0
+                except Exception:
+                    continue
+                if gamma_mode is True and gval == 0.0:
+                    continue
+                if gamma_mode is False and gval != 0.0:
+                    continue
+
+        res = np.load(f, allow_pickle=True).item()
+        d = res["performance"]["day_to_accs"]
+
+        # normalize to {day:int -> acc:float}
+        day_dict = {}
+        items = d.items() if isinstance(d, dict) else enumerate(d)
+        for k, v in items:
+            if isinstance(v, (list, tuple, np.ndarray)):
+                v = float(np.nanmean(np.asarray(v, dtype=float)))
+            else:
+                v = float(v)
+            day_dict[int(k)] = v
+
+        runs[model].append((f, day_dict))
+
+    # print final used files
+    if gamma_mode == "ALL":
+        mode_str = "gamma=ALL (ignored)"
+    else:
+        mode_str = "gamma!=0 (HRL excluded)" if gamma_mode is True else "gamma==0 (HRL included)"
+
+    print(f"\nUsed files | finger={finger}, shift={shift}, mode={mode_str}")
+    for model in models:
+        print(f"{model}: {len(runs[model])} files")
+        for p, _ in runs[model]:
+            print("  -", p)
+
+    # plot
+    plt.figure(figsize=(8, 4.5))
+    any_plotted = False
+
+    for model in models:
+        day_dicts = [dd for _, dd in runs[model]]
+        if not day_dicts:
+            continue
+
+        days = sorted({day for dd in day_dicts for day in dd.keys()})
+        mean, std = [], []
+
+        for day in days:
+            vals = [dd[day] for dd in day_dicts if day in dd and np.isfinite(dd[day])]
+            if len(vals) == 0:
+                mean.append(np.nan); std.append(np.nan)
+            elif len(vals) == 1:
+                mean.append(float(vals[0])); std.append(0.0)
+            else:
+                mean.append(float(np.mean(vals)))
+                std.append(float(np.std(vals, ddof=1)))
+
+        x = np.array(days)
+        y = np.array(mean, float)
+        s = np.array(std, float)
+        ok = np.isfinite(y)
+
+        plt.plot(x[ok], y[ok], label=f"{model} (n={len(day_dicts)} files)")
+        plt.fill_between(x[ok], y[ok]-s[ok], y[ok]+s[ok], alpha=0.2)
+        any_plotted = True
+
+    if not any_plotted:
+        raise ValueError("No files matched after filtering.")
+
+    plt.xlabel("Day")
+    plt.ylabel("Accuracy")
+    plt.ylim(*ylim)
+    plt.grid(alpha=0.3)
+    if title is None:
+        title = f"Daily mean±std | finger={finger}, shift={shift} | {mode_str}"
+    plt.title(title)
+    plt.legend(fontsize=8)
+    plt.tight_layout()
+    plt.show()
+
+
+
+
+def save_shift_video_mp4(results_dir, out_mp4_path, finger="idx",
+                         shifts=(0,1,3,5,7,9,11),
+                         models=("banditron","banditronRP","HRL","AGREL"),
+                         ylim=(0,1), secs_per_frame=0.5, gamma_mode=None):
+
+    if not out_mp4_path.endswith(".mp4"):
+        raise ValueError("out_mp4_path must end with .mp4")
+
+    fps = max(1, int(round(1.0 / float(secs_per_frame))))
+
+    # ★幅/高さが偶数になるようにする（例: 1200x674）
+    dpi = 100
+    fig = plt.figure(figsize=(12, 6.74), dpi=dpi)  # 12*100=1200, 6.74*100=674
+    ax = fig.add_subplot(111)
+
+    writer = FFMpegWriter(fps=fps)
+
+    os.makedirs(os.path.dirname(out_mp4_path) or ".", exist_ok=True)
+
+    with writer.saving(fig, out_mp4_path, dpi=dpi):
+        for sh in shifts:
+            models_daily_mean_std(results_dir, finger=finger, shift=sh,
+                                        models=list(models), ylim=ylim, ax=ax, gamma_mode=gamma_mode)
+            fig.tight_layout()
+            writer.grab_frame()
+
+    plt.close(fig)
+    print("Saved:", out_mp4_path)
+
+
 # ------------------------- #
 # Example usage
 # ------------------------- #
@@ -382,3 +630,16 @@ for shift in [1]: #need to done for 0 shifting
             print(f"  Mean Performance:                               {mean_perf:>8.4f}")
             print(f"  First Half perf. : Second Half perf.:           {np.mean(first_half_means):>8.4f} : {np.mean(second_half_means):>8.4f}")
             print(f"{'='*70}\n")
+
+
+# visualizations
+# results_dir = "/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/pred_results/position/3classes"
+
+# # for shift in [0, 1, 3, 5, 7, 9, 11]:
+# #     plot_4models_daily_mean_std(results_dir, finger="idx", shift=0, models=["banditron","banditronRP","HRL","AGREL"], gamma_mode="ALL")
+# #     #task: fix colors for  models
+
+# out_mp4_path = "/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/video/video.mp4"
+# save_shift_video_mp4(results_dir, out_mp4_path, finger="idx", shifts=(0,1,3,5,7,9,11),
+#                          models=("banditron","banditronRP","HRL","AGREL"),
+#                          ylim=(0,1), secs_per_frame=0.5, gamma_mode=True)

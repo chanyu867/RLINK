@@ -138,7 +138,7 @@ def assemble_features(neural_data, labels):
     Returns:
         X: (N, 97)
     """
-    print("shape: ", np.array(neural_data).shape, np.array(labels).shape)
+    # print("shape: ", np.array(neural_data).shape, np.array(labels).shape)
     return np.concatenate([neural_data, labels[:, None]], axis=1)
 
 
@@ -329,7 +329,9 @@ if __name__ == "__main__":
 
     finger_type = "idx" # "idx", "mrs", or "together"
     mode = "position" # "position" or "velocity"
-    boundaries = [0.2, 0.4, 0.6, 0.8]
+    # boundaries = [0.2, 0.4, 0.6, 0.8]
+    # boundaries = [0.25, 0.5, 0.75]
+    boundaries = [0.33, 0.66]
 
     #load trial ID data
     trial_ID = np.load("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_number.npy", allow_pickle=True)
@@ -338,7 +340,7 @@ if __name__ == "__main__":
     # 1. load array with classes
     # labels is (N,) array of classes,
     # class_map is a class description like {0: [0.0, 0.15], 1: [0.15, 0.85], 2: [0.85, 1.0]}
-    for shift in [1,3,5,7,9,20,50]:
+    for shift in [0, 1, 3, 5, 7, 9, 11, 20, 50]:
         labels, class_map, mask = load_or_create_classes(
             finger_type = finger_type,
             mode = mode,
