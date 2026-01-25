@@ -10,9 +10,9 @@ target_style_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/targ
 out_dir="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Results/Perceptron/${finger_ID}_${mode}"
 
 # for boundary in "0.33_0.66" "0.25_0.5_0.75" "0.2_0.4_0.6_0.8"; do
-for boundary in "0.33_0.66" "0.25_0.5_0.75" "0.2_0.4_0.6_0.8"; do
+for boundary in "0.33_0.66"; do
     label_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/classes_dir/${finger_ID}_${mode}_labels_${boundary}_shift0.npy"
-    for slicing_day in 1 5; do
+    for slicing_day in 1; do
         for task in "random"; do
             python mlp_eval.py \
                 --sbp_path ${sbp_path} \
