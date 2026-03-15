@@ -14,13 +14,55 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
-
+from eval_metrics import (
+    per_day_balanced_accuracy,
+    per_day_f1_macro,
+    balanced_accuracy_macro,   # NEW
+    f1_macro,                  # NEW
+)
 
 # =========================
 # Logging
 # =========================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+### plot performance for each class
+def plot_perclass_accuracy(
+    days: np.ndarray,
+    mean_pc: np.ndarray,
+    std_pc: np.ndarray,
+    class_ids: np.ndarray,
+    title: str,
+    out_png: str
+) -> None:
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Plot a line for each class
+    for k, c_id in enumerate(class_ids):
+        m = mean_pc[:, k]
+        s = std_pc[:, k]
+        ax.plot(days, m, marker="o", label=f"Class {int(c_id)}")
+        ax.fill_between(days, m - s, m + s, alpha=0.15)
+
+    ax.set_xlabel("Day (day_info value)")
+    ax.set_ylabel("Accuracy")
+    ax.set_ylim(0, 1)
+    ax.grid(True, alpha=0.2)
+    ax.legend(loc="best", title="Classes")
+
+    # Set x-ticks to match the days
+    xt = list(days.astype(int).tolist())
+    ax.set_xticks(xt)
+    ax.set_xticklabels([str(v) for v in xt], rotation=45, ha="right")
+
+    fig.suptitle(title)
+    fig.tight_layout()
+    plt.show()
+    fig.savefig(out_png, dpi=200)
+    plt.close(fig)
+
+
 
 
 # =========================
@@ -58,6 +100,14 @@ def parse_hidden_sizes_from_npz(arr: np.ndarray) -> List[int]:
 
 def hidden_tag(hidden: List[int]) -> str:
     return "hsnone" if len(hidden) == 0 else "hs" + "-".join(map(str, hidden))
+
+def load_split_npz(path: str) -> Dict[str, np.ndarray]:
+    z = np.load(path, allow_pickle=False)
+    need = ["test_trials", "slicing_day_value"]
+    for k in need:
+        if k not in z.files:
+            raise ValueError(f"split_npz missing key '{k}': {path}. keys={z.files}")
+    return {k: z[k] for k in z.files}
 
 
 # =========================
@@ -400,62 +450,202 @@ def per_day_perclass_accuracy(
 # =========================
 # Plotting (same as current eval: overall + per-class + slope fit)
 # =========================
-def plot_two_panel(
+# def plot_two_panel( #-> plot only performance change over days
+#     days: np.ndarray,
+#     mean: np.ndarray,
+#     std: np.ndarray,
+#     class_ids: np.ndarray,
+#     mean_pc: np.ndarray,
+#     std_pc: np.ndarray,
+#     title: str,
+#     out_png: str,
+#     # NEW: baseline point (held-out test within training window)
+#     baseline_x: Optional[int] = None,
+#     baseline_mean: Optional[float] = None,
+#     baseline_std: Optional[float] = None,
+#     baseline_label: str = "held-out(test, train-window)",
+# ) -> None:
+#     fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+
+#     # Top: overall (future days)
+#     ax0.plot(days, mean, marker="o", label="future mean (over seeds)")
+#     ax0.fill_between(days, mean - std, mean + std, alpha=0.2)
+
+#     # NEW: red dot for day1 held-out test
+#     if baseline_x is not None and baseline_mean is not None:
+#         if baseline_std is None:
+#             ax0.scatter([baseline_x], [baseline_mean], color="red", zorder=5, label=baseline_label)
+#         else:
+#             ax0.errorbar(
+#                 [baseline_x], [baseline_mean],
+#                 yerr=[baseline_std],
+#                 fmt="o", color="red", capsize=3, zorder=5, label=baseline_label
+#             )
+
+#     # slope fit only on future days (keep original behavior)
+#     mask = np.isfinite(days) & np.isfinite(mean)
+#     if np.sum(mask) >= 2:
+#         x = days[mask].astype(float)
+#         y = mean[mask].astype(float)
+#         slope, intercept = np.polyfit(x, y, deg=1)
+#         y_fit = slope * x + intercept
+#         ax0.plot(x, y_fit, color="red", linewidth=2, label=f"slope={slope:.4g}/day")
+
+#         angle_deg = float(np.degrees(np.arctan(slope)))
+#         mean_over_days = float(np.nanmean(y))
+#         ax0.text(
+#             0.02, 0.95,
+#             f"mean(acc) = {mean_over_days:.4f}\n"
+#             f"slope = {slope:.4g} / day\n"
+#             f"angle = {angle_deg:.2f}°",
+#             transform=ax0.transAxes,
+#             va="top", ha="left",
+#             bbox=dict(boxstyle="round", alpha=0.2),
+#         )
+
+#     ax0.set_ylabel("Accuracy")
+#     ax0.set_ylim(0, 1)
+#     ax0.grid(True, alpha=0.2)
+#     ax0.legend()
+
+#     # Bottom: per-class (future days only)
+#     for k, c in enumerate(class_ids):
+#         m = mean_pc[:, k]
+#         s = std_pc[:, k]
+#         ax1.plot(days, m, marker="o", label=f"class {int(c)}")
+#         ax1.fill_between(days, m - s, m + s, alpha=0.15)
+
+#     ax1.set_xlabel("Day (day_info value)")
+#     ax1.set_ylabel("Accuracy")
+#     ax1.set_ylim(0, 1)
+#     ax1.grid(True, alpha=0.2)
+#     ax1.legend()
+
+#     # NEW: explicit x tick labels including baseline day
+#     xt = list(days.astype(int).tolist())
+#     if baseline_x is not None:
+#         xt = sorted(set(xt + [int(baseline_x)]))
+#     ax1.set_xticks(xt)
+#     ax1.set_xticklabels([str(v) for v in xt], rotation=45, ha="right")
+
+#     fig.suptitle(title)
+#     fig.tight_layout(rect=[0, 0, 1, 0.95])
+#     fig.savefig(out_png, dpi=200)
+#     plt.close(fig)
+
+
+def _fit_slope_with_baseline(
     days: np.ndarray,
     mean: np.ndarray,
-    std: np.ndarray,
-    class_ids: np.ndarray,
-    mean_pc: np.ndarray,
-    std_pc: np.ndarray,
+    baseline_x: Optional[int],
+    baseline_mean: Optional[float],
+) -> Tuple[Optional[float], Optional[float], Optional[np.ndarray], Optional[np.ndarray]]:
+    # build x,y including baseline
+    xs = []
+    ys = []
+    m = np.isfinite(days) & np.isfinite(mean)
+    xs.extend(days[m].astype(float).tolist())
+    ys.extend(mean[m].astype(float).tolist())
+
+    if baseline_x is not None and baseline_mean is not None and np.isfinite(baseline_mean):
+        xs.append(float(baseline_x))
+        ys.append(float(baseline_mean))
+
+    if len(xs) < 2:
+        return None, None, None, None
+
+    x = np.asarray(xs, dtype=float)
+    y = np.asarray(ys, dtype=float)
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+
+    slope, intercept = np.polyfit(x, y, deg=1)
+    return float(slope), float(intercept), x, (slope * x + intercept)
+
+
+def plot_three_metrics(
+    *,
+    days: np.ndarray,
+    mean_acc: np.ndarray,
+    std_acc: np.ndarray,
+    mean_bacc: np.ndarray,
+    std_bacc: np.ndarray,
+    mean_f1: np.ndarray,
+    std_f1: np.ndarray,
     title: str,
     out_png: str,
+    baseline_x: Optional[int] = None,
+    baseline_acc_mean: Optional[float] = None,
+    baseline_acc_std: Optional[float] = None,
+    baseline_bacc_mean: Optional[float] = None,
+    baseline_bacc_std: Optional[float] = None,
+    baseline_f1_mean: Optional[float] = None,
+    baseline_f1_std: Optional[float] = None,
+    baseline_label: str = "train-day held-out (from split_npz)",
 ) -> None:
-    fig, (ax0, ax1) = plt.subplots(2, 1, figsize=(10, 8), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(11, 10), sharex=True)
 
-    # Top: overall
-    ax0.plot(days, mean, marker="o", label="overall mean (over seeds)")
-    ax0.fill_between(days, mean - std, mean + std, alpha=0.2)
+    def _panel(ax, y_mean, y_std, ylab, b_mean, b_std):
+        ax.plot(days, y_mean, marker="o", label="future mean (over seeds)")
+        ax.fill_between(days, y_mean - y_std, y_mean + y_std, alpha=0.2)
 
-    mask = np.isfinite(days) & np.isfinite(mean)
-    if np.sum(mask) >= 2:
-        x = days[mask].astype(float)
-        y = mean[mask].astype(float)
-        slope, intercept = np.polyfit(x, y, deg=1)  # keep identical behavior
-        y_fit = slope * x + intercept
-        ax0.plot(x, y_fit, color="red", linewidth=2, label=f"slope={slope:.4g}/day")
+        # baseline red point
+        if baseline_x is not None and b_mean is not None:
+            if b_std is None or (not np.isfinite(b_std)):
+                ax.scatter([baseline_x], [b_mean], color="red", zorder=5, label=baseline_label)
+            else:
+                ax.errorbar([baseline_x], [b_mean], yerr=[b_std], fmt="o", color="red", capsize=3, zorder=5, label=baseline_label)
 
-        angle_deg = float(np.degrees(np.arctan(slope)))
-        mean_over_days = float(np.nanmean(y))
-        ax0.text(
-            0.02, 0.95,
-            f"mean(acc) = {mean_over_days:.4f}\n"
-            f"slope = {slope:.4g} / day\n"
-            f"angle = {angle_deg:.2f}°",
-            transform=ax0.transAxes,
-            va="top", ha="left",
-            bbox=dict(boxstyle="round", alpha=0.2),
-        )
+        # slope INCLUDING baseline point
+        slope, intercept, xfit, yfit = _fit_slope_with_baseline(days, y_mean, baseline_x, b_mean)
+        if slope is not None and xfit is not None and yfit is not None:
+            ax.plot(xfit, yfit, color="red", linewidth=2, label=f"slope={slope:.4g}/day")
+            angle_deg = float(np.degrees(np.arctan(slope)))
+            ax.text(
+                0.02, 0.95,
+                f"slope = {slope:.4g} / day\nangle = {angle_deg:.2f}°",
+                transform=ax.transAxes,
+                va="top", ha="left",
+                bbox=dict(boxstyle="round", alpha=0.2),
+            )
 
-    ax0.set_ylabel("Accuracy")
-    ax0.set_ylim(0, 1)
-    ax0.grid(True, alpha=0.2)
-    ax0.legend()
+        ax.set_ylabel(ylab)
+        ax.set_ylim(0, 1)
+        ax.grid(True, alpha=0.2)
+        ax.legend(loc="best")
 
-    # Bottom: per-class
-    for k, c in enumerate(class_ids):
-        m = mean_pc[:, k]
-        s = std_pc[:, k]
-        ax1.plot(days, m, marker="o", label=f"class {int(c)}")
-        ax1.fill_between(days, m - s, m + s, alpha=0.15)
+    _panel(axes[0], mean_acc, std_acc, "Accuracy", baseline_acc_mean, baseline_acc_std)
+    _panel(axes[1], mean_bacc, std_bacc, "Balanced Accuracy", baseline_bacc_mean, baseline_bacc_std)
+    _panel(axes[2], mean_f1, std_f1, "Macro-F1", baseline_f1_mean, baseline_f1_std)
 
-    ax1.set_xlabel("Test day")
-    ax1.set_ylabel("Accuracy")
-    ax1.set_ylim(0, 1)
-    ax1.grid(True, alpha=0.2)
-    ax1.legend()
+    all_x = list(days.astype(int).tolist())
+    if baseline_x is not None:
+        all_x.append(int(baseline_x))
+    all_x = sorted(set(all_x))
+
+    x_min = int(np.min(all_x))
+    x_max = int(np.max(all_x))
+
+    # ticks at numeric interval = 3
+    xt = list(np.arange(x_min, x_max + 1, 3, dtype=int))
+
+    # make sure baseline_x is visible as a tick even if not aligned to step=3
+    if baseline_x is not None and int(baseline_x) not in xt:
+        xt.append(int(baseline_x))
+        xt = sorted(set(xt))
+
+    # apply the same ticks/labels to ALL three axes
+    for ax in axes:
+        ax.set_xlabel("Day (day_info value)")  # xlabel on every subplot
+        ax.set_xticks(xt)
+        ax.set_xticklabels([str(v) for v in xt], rotation=45, ha="right")
+        ax.tick_params(labelbottom=True)       # show tick labels even on upper axes (sharex=True)
 
     fig.suptitle(title)
     fig.tight_layout(rect=[0, 0, 1, 0.95])
+
+    plt.show()
     fig.savefig(out_png, dpi=200)
     plt.close(fig)
 
@@ -472,13 +662,13 @@ def find_matching_weights(
 ) -> List[str]:
     """
     New training saves weights under:
-      out_dir/weights/{prefix}_{hs_tag}_seed{seed}_Nclasses{K}_day{slicing_day}_weights.npz
+      out_dir/weights/{prefix}_{hs_tag}_seed{seed}_Nclasses{K}_day{slicing_day}_{maybe something depending on the mode}weights.npz
 
     We do:
       (1) glob by prefix + day
       (2) filter by reading meta target_type/label_mask/slicing_day inside the npz
     """
-    pattern = os.path.join(weights_dir, f"{prefix}_*_seed*_Nclasses*_day{slicing_day}_weights.npz")
+    pattern = os.path.join(weights_dir, f"{prefix}_*_seed*_Nclasses*_day{slicing_day}_*weights.npz")
     candidates = sorted(glob.glob(pattern))
     if not candidates:
         return []
@@ -542,6 +732,16 @@ def build_argparser() -> argparse.ArgumentParser:
 
     ap.add_argument("--max_test_samples", type=int, default=0,
                     help="If >0, evaluate only the first N test samples (before lag/scale).")
+    
+
+    ap.add_argument(
+        "--split_npz",
+        type=str,
+        default=None,
+        help="split_indices.npz (from mlp_hpo.py). If given, we also evaluate held-out test within the training window "
+             "(<= slicing_day_value) and plot it as a red dot at x=slicing_day_value.",
+    )
+
 
     return ap
 
@@ -558,7 +758,7 @@ def main() -> None:
     # -------------------------
     data0 = load_all_arrays(args)
     allowed = parse_label_mask(args.label_mask)
-    data = apply_task_masks(data0, target_type=args.target_type, allowed_labels=allowed)
+    data = apply_task_masks(data0, target_type=args.target_type, allowed_labels=None)
 
     X = data.sbp.astype(np.float32)
     y = data.labels.astype(int)
@@ -577,10 +777,49 @@ def main() -> None:
     day_test = day_info_i[test_mask]
     trial_bin_test = data.trial_bin[test_mask]
 
-    logger.info(f"slicing_day_value={slicing_day_value} (idx={args.slicing_day})  testN={len(y_test)}")
+    logger.info(f"slicing_day_value={slicing_day_value}-th day (idx={args.slicing_day})  testN={len(y_test)}")
 
     # class ids (for per-class plot) -- identical logic
-    class_ids = np.array(sorted(np.unique(y_test).astype(int).tolist()), dtype=int)
+    if allowed is not None:
+        class_ids = np.arange(len(allowed), dtype=int) # e.g., creates [0, 1]
+    else:
+        class_ids = np.array(sorted(np.unique(y_test).astype(int).tolist()), dtype=int)
+
+    # -------------------------
+    # (2.5) Also prepare TRAIN-WINDOW subset (<= slicing_day_value) for day1 held-out test
+    # -------------------------
+    trainwin_mask = (day_info_i <= slicing_day_value)
+    if args.split_npz is not None:
+        if not np.any(trainwin_mask):
+            raise ValueError("No samples in train-window (day_info_i <= slicing_day_value).")
+
+        X_tw_raw = X[trainwin_mask]
+        y_tw = y[trainwin_mask]
+        day_tw = day_info_i[trainwin_mask]
+        trial_bin_tw = data.trial_bin[trainwin_mask]
+
+        trial_id_tw, _ = build_trial_ids_from_trialbin(trial_bin_tw)
+
+        split = load_split_npz(args.split_npz)
+        split_sdv = int(split["slicing_day_value"])
+        if split_sdv != int(slicing_day_value):
+            raise ValueError(
+                f"split_npz slicing_day_value mismatch: split={split_sdv} vs current={int(slicing_day_value)}. "
+                "Use the SAME slicing_day and SAME masks (target_type/label_mask) as used in HPO."
+            )
+
+        test_trials = split["test_trials"].astype(int)
+        # held-out test within train-window: samples belonging to test_trials (trial-wise, safe for lag)
+        heldout_mask = np.isin(trial_id_tw.astype(int), test_trials)
+
+        if not np.any(heldout_mask):
+            raise ValueError("No held-out (day1) test samples found from split_npz test_trials.")
+
+        X_hold_raw = X_tw_raw[heldout_mask]
+        y_hold = y_tw[heldout_mask]
+        day_hold = day_tw[heldout_mask]
+        trial_hold = trial_id_tw[heldout_mask]
+
 
     # -------------------------
     # (3) trial summary (future test only)
@@ -617,6 +856,9 @@ def main() -> None:
     # (5) Run inference per seed-weight
     # -------------------------
     per_seed = []   # list of (seed, uniq_days, day_acc, acc_pc)
+    heldout_acc_by_seed: Dict[int, float] = {}
+    heldout_bacc_by_seed: Dict[int, float] = {}
+    heldout_f1_by_seed: Dict[int, float] = {}
     all_days_set = set()
 
     # base arrays (important: reset every seed)
@@ -628,6 +870,9 @@ def main() -> None:
     for w_path in weight_files:
         model_meta_preview = np.load(w_path, allow_pickle=True)
         seed = int(model_meta_preview["seed"]) if "seed" in model_meta_preview.files else -1
+
+
+        logger.info(f"Loading weights from: {w_path}")
 
         # start from base every seed
         Xr = X_base
@@ -642,6 +887,7 @@ def main() -> None:
             yr = yr[:n]
             dr = dr[:n]
             tr = tr[:n]
+            logger.info(f"[seed={seed}] max_test_samples={n}, yr unique counts: {dict(zip(*np.unique(yr, return_counts=True)))}")
 
         # Read meta for lag/scaler (consistent with weight)
         # (We still load the model after lag so input_dim matches.)
@@ -662,9 +908,21 @@ def main() -> None:
             X=Xr, y=yr, day=dr, group=group, n_lags=n_lags, lag_step=lag_step
         )
 
+        if allowed is not None:
+            valid_idx = np.isin(yr, allowed)
+            Xr = Xr[valid_idx]
+            yr = yr[valid_idx]
+            dr = dr[valid_idx]
+            
         if Xr.shape[0] == 0:
-            logger.warning(f"[seed={seed}] No samples after lag. Skip.")
+            logger.warning(f"[seed={seed}] No samples after lag and mask. Skip.")
             continue
+            
+        # Remap labels so [0, 2] becomes [0, 1] to match the model's output
+        if allowed is not None:
+            unique_labels = np.sort(np.unique(yr))
+            remapper = {old_val: new_val for new_val, old_val in enumerate(unique_labels)}
+            yr = np.vectorize(remapper.get)(yr)
 
         # load model + meta (scaler params etc.)
         model, meta = load_model_and_meta(w_path, in_dim=Xr.shape[1], device=device)
@@ -688,15 +946,95 @@ def main() -> None:
         uniq_d, day_acc, _day_n = per_day_accuracy(dr, y_pred, yr)
         _, acc_pc, _n_pc = per_day_perclass_accuracy(dr, y_pred, yr, class_ids)
 
+        # NEW: per-day balanced accuracy and macro-F1
+        uniq_d_b, day_bacc, _ = per_day_balanced_accuracy(dr, y_pred, yr, class_ids)
+        uniq_d_f, day_f1, _ = per_day_f1_macro(dr, y_pred, yr, class_ids)
+
+        # sanity: day order should match
+        if not np.array_equal(uniq_d, uniq_d_b) or not np.array_equal(uniq_d, uniq_d_f):
+            raise RuntimeError("per-day day indexing mismatch among metrics.")
+
         if len(uniq_d) == 0:
             logger.warning(f"[seed={seed}] per-day arrays empty. Skip.")
             continue
 
-        per_seed.append((meta.seed, meta.hs_tag, uniq_d, day_acc, acc_pc))
+        per_seed.append((meta.seed, meta.hs_tag, uniq_d, day_acc, day_bacc, day_f1, acc_pc))
         all_days_set.update(uniq_d.tolist())
 
         overall = float(np.mean(y_pred == yr))
         logger.info(f"[seed={meta.seed}] overall_acc(future)={overall:.4f}  days={len(uniq_d)}")
+
+        # NEW: evaluate held-out test within training day if split_npz is given
+        if args.split_npz is not None:
+            Xh = X_hold_raw
+            yh = y_hold
+            dh = day_hold
+            th = trial_hold
+
+            # apply the SAME max_test_samples rule (optional) BEFORE lag/scale
+            if args.max_test_samples and args.max_test_samples > 0:
+                n = int(args.max_test_samples)
+                Xh = Xh[:n]
+                yh = yh[:n]
+                dh = dh[:n]
+                th = th[:n]
+
+            # group boundary prevention (must match weight meta)
+            group_h = None
+            if lag_group == "day":
+                group_h = dh
+            elif lag_group == "trial":
+                group_h = th
+
+            Xh, yh, dh = make_lagged_features_with_day(
+                X=Xh, y=yh, day=dh, group=group_h, n_lags=n_lags, lag_step=lag_step
+            )
+            
+            # NEW: FILTER AND REMAP HELDOUT DATA
+            if allowed is not None:
+                valid_idx_h = np.isin(yh, allowed)
+                Xh = Xh[valid_idx_h]
+                yh = yh[valid_idx_h]
+                dh = dh[valid_idx_h]
+
+            if Xh.shape[0] > 0:
+                if allowed is not None:
+                    yh = np.vectorize(remapper.get)(yh)
+                    
+                Xh = apply_saved_scaler(Xh, meta)
+                yph = predict_labels(model, Xh, device=device, batch_size=args.batch_size)
+                n_eff_h = min(len(yph), len(yh))
+
+                if n_eff_h <= 0:
+                    acc_h = np.nan
+                    bacc_h = np.nan
+                    f1_h = np.nan
+                else:
+                    yph = yph[:n_eff_h]
+                    yh_eff = yh[:n_eff_h]
+                    dh_eff = dh[:n_eff_h]
+
+                    m_day = (dh_eff == int(slicing_day_value))
+                    if np.any(m_day):
+                        yt0 = yh_eff[m_day]
+                        yp0 = yph[m_day]
+                    else:
+                        yt0 = yh_eff
+                        yp0 = yph
+
+                    acc_h = float(np.mean(yp0 == yt0))
+                    bacc_h = float(balanced_accuracy_macro(yt0, yp0, class_ids))
+                    f1_h = float(f1_macro(yt0, yp0, class_ids))
+
+                heldout_acc_by_seed[int(meta.seed)] = acc_h
+                heldout_bacc_by_seed[int(meta.seed)] = bacc_h
+                heldout_f1_by_seed[int(meta.seed)] = f1_h
+
+                logger.info(
+                    f"[seed={meta.seed}] heldout(train-day) acc={acc_h:.4f} bAcc={bacc_h:.4f} F1={f1_h:.4f}"
+                )
+
+
 
     if not per_seed:
         raise RuntimeError("All seeds were skipped (no valid evaluation outputs).")
@@ -705,28 +1043,32 @@ def main() -> None:
     # (6) Aggregate mean/std across seeds for each future day
     # -------------------------
     days_sorted = np.array(sorted(all_days_set), dtype=int)
-    seeds_sorted = np.array(sorted({int(s) for (s, _, _, _, _) in per_seed}), dtype=int)
+    seeds_sorted = np.array(sorted({int(t[0]) for t in per_seed}), dtype=int)
 
     # assume all seeds share the same hs_tag; if not, we still pick the first for naming
     hs_tag_out = per_seed[0][1]
 
-    # overall per-day (seeds x days)
-    A = np.full((len(seeds_sorted), len(days_sorted)), np.nan, dtype=float)
-    # per-class per-day (seeds x days x K)
+    A = np.full((len(seeds_sorted), len(days_sorted)), np.nan, dtype=float)       # acc
+    A_b = np.full((len(seeds_sorted), len(days_sorted)), np.nan, dtype=float)     # bAcc
+    A_f = np.full((len(seeds_sorted), len(days_sorted)), np.nan, dtype=float)     # F1
     K = int(len(class_ids))
     A_pc = np.full((len(seeds_sorted), len(days_sorted), K), np.nan, dtype=float)
 
     seed_to_row = {int(s): i for i, s in enumerate(seeds_sorted)}
     day_to_col = {int(d): j for j, d in enumerate(days_sorted)}
 
-    for seed, _hs, dlist, alist, acc_pc in per_seed:
+    for seed, _hs, dlist, alist, blist, flist, acc_pc in per_seed:
         r = seed_to_row[int(seed)]
         for i, d in enumerate(dlist):
             c = day_to_col[int(d)]
             A[r, c] = float(alist[i])
+            A_b[r, c] = float(blist[i])
+            A_f[r, c] = float(flist[i])
             A_pc[r, c, :] = acc_pc[i, :]
 
-    mean_acc = np.nanmean(A, axis=0)
+    mean_acc = np.nanmean(A, axis=0);    std_acc = np.nanstd(A, axis=0)
+    mean_bacc = np.nanmean(A_b, axis=0); std_bacc = np.nanstd(A_b, axis=0)
+    mean_f1 = np.nanmean(A_f, axis=0);   std_f1 = np.nanstd(A_f, axis=0)
     std_acc = np.nanstd(A, axis=0)
     mean_pc = np.nanmean(A_pc, axis=0)  # (n_days, K)
     std_pc = np.nanstd(A_pc, axis=0)
@@ -742,7 +1084,54 @@ def main() -> None:
         f"{args.target_type} | slicing_day={args.slicing_day} (value={slicing_day_value}) | "
         f"seeds={len(seeds_sorted)} | hs={hs_tag_out}"
     )
-    plot_two_panel(days_sorted, mean_acc, std_acc, class_ids, mean_pc, std_pc, title=title, out_png=out_png)
+    baseline_x = None
+
+    b_acc_mean = b_acc_std = None
+    b_bacc_mean = b_bacc_std = None
+    b_f1_mean = b_f1_std = None
+
+    if args.split_npz is not None:
+        baseline_x = int(slicing_day_value)
+
+        def _mean_std_from_dict(dct: Dict[int, float]) -> Tuple[Optional[float], Optional[float]]:
+            vals = []
+            for s in seeds_sorted.tolist():
+                v = dct.get(int(s), np.nan)
+                if np.isfinite(v):
+                    vals.append(float(v))
+            if len(vals) == 0:
+                return None, None
+            return float(np.mean(vals)), float(np.std(vals))
+
+        b_acc_mean, b_acc_std = _mean_std_from_dict(heldout_acc_by_seed)
+        b_bacc_mean, b_bacc_std = _mean_std_from_dict(heldout_bacc_by_seed)
+        b_f1_mean, b_f1_std = _mean_std_from_dict(heldout_f1_by_seed)
+
+    plot_three_metrics(
+        days=days_sorted,
+        mean_acc=mean_acc, std_acc=std_acc,
+        mean_bacc=mean_bacc, std_bacc=std_bacc,
+        mean_f1=mean_f1, std_f1=std_f1,
+        title=title,
+        out_png=out_png,
+        baseline_x=baseline_x,
+        baseline_acc_mean=b_acc_mean, baseline_acc_std=b_acc_std,
+        baseline_bacc_mean=b_bacc_mean, baseline_bacc_std=b_bacc_std,
+        baseline_f1_mean=b_f1_mean, baseline_f1_std=b_f1_std,
+        baseline_label="train-day held-out (from split_npz)",
+    )
+
+    # NEW: Plot per-class accuracy
+    out_png_pc = os.path.join(plot_eval_dir, f"{base}_perclass_meanstd.png")
+    plot_perclass_accuracy(
+        days=days_sorted,
+        mean_pc=mean_pc,
+        std_pc=std_pc,
+        class_ids=class_ids,
+        title=f"Per-Class Accuracy | {title}",
+        out_png=out_png_pc
+    )
+
 
     out_npz = os.path.join(res_eval_dir, f"{base}_perday_meanstd.npz")
     np.savez(
@@ -760,10 +1149,17 @@ def main() -> None:
         mean_pc=mean_pc,
         std_pc=std_pc,
         class_ids=class_ids,
+        perday_bacc_matrix=A_b,
+        perday_f1_matrix=A_f,
+        mean_bacc=mean_bacc,
+        std_bacc=std_bacc,
+        mean_f1=mean_f1,
+        std_f1=std_f1
     )
 
     print("saved:")
     print(" ", out_png)
+    print(" ", out_png_pc)
     print(" ", out_npz)
 
 

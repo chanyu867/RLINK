@@ -10,7 +10,7 @@ target_style_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/targ
 for boundary in "0.33_0.66"; do
     label_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/classes_dir/${finger_ID}_${mode}_labels_${boundary}_shift0.npy"
     for task in "random"; do
-        for seed in 0 1 2 3 4 5 6 7 8 9; do
+        for seed in 0; do
             python mlp_train_day.py \
                 --sbp_path ${sbp_path} \
                 --label_path ${label_path} \
@@ -22,10 +22,15 @@ for boundary in "0.33_0.66"; do
                 --scale \
                 --lag_group "trial" \
                 --batch_size 256 \
-                --epochs 250 \
+                --epochs 100 \
                 --prefix "mlp_${task}_b${boundary}" \
-                --best_param "/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/baseline_perf/hpo/mlp/hpo_${boundary}_slicing1.json" \
-                --seed ${seed}
+                --seed ${seed} \
+                --print_every 50 \
+                --label_mask "0,2" \
+                --prefix "mlp_${task}_b${boundary}_eliminate1" \
+                --best_param "/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/baseline_perf/hpo/mlp_cv/hpo_${boundary}_slicing1.json" \
+                # --cv_folds 5 \
+
         done
     done
 done

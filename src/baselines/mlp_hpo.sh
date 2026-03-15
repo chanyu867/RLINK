@@ -6,10 +6,10 @@ day_info_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/day_numb
 trial_bin="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_bin.npy"
 target_style_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/target_style.npy"
 
-out_dir="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/baseline_perf/hpo/mlp"
+out_dir="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/baseline_perf/hpo/mlp_cv"
 
-for boundary in "0.33_0.66" "0.25_0.5_0.75" "0.2_0.4_0.6_0.8"; do
-    for slicing in 1 5; do
+for boundary in "0.5" "0.33_0.66"; do
+    for slicing in 1; do
         label_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/classes_dir/${finger_ID}_${mode}_labels_${boundary}_shift0.npy"
         python mlp_hpo.py \
             --sbp_path ${sbp_path} \
@@ -20,6 +20,7 @@ for boundary in "0.33_0.66" "0.25_0.5_0.75" "0.2_0.4_0.6_0.8"; do
             --target_style_path ${target_style_path} \
             --epochs 50 \
             --n_trials 200 \
+            --metric "f1_macro" \
             --save_best_json "${out_dir}/hpo_${boundary}_slicing${slicing}.json"
 
     done
