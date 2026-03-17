@@ -1,6 +1,6 @@
 python mlp_eval_day.py \
     --results_dir /Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/baseline_perf/mlp_day/random/results \
-    --glob_pat "*_outputs_day*.npz" \
+    --glob_pat "mlp_random_b0.2_0.4_0.6_0.8_eliminate-center_hs512-512_seed0_Nclasses4_day*_outputs_day*.npz" \
     --out_dir /Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/baseline_perf/mlp_day/random/plots \
     --max_day 100 \
     --x_tick_step 3

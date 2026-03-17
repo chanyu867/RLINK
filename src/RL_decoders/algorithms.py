@@ -5,7 +5,7 @@
    
    Version: v1.0
 ''' 
-
+import os
 from src.utils import *
 import warnings
 import time
@@ -50,59 +50,49 @@ and y denotes the true labels associated with each observation (X)
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
 
-
-def banditron(X, y, day_info, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The exploration exploitation constant and eta are given as optional arguments.
-    #(a) turning 90o right, (b) moving forward by 2 m, (c) turning 90o left, and (d) staying still for 5 seconds (stop task)
-    #k is originally 4
-    
-    #1. retrieve params:
-    T = X.shape[0] 
+# def banditron(X, y, day_info, error, sparsity_rate, k, gamma): #**kwargs: gamma, eta: The exploration exploitation constant and eta are given as optional arguments.
+def banditron(X, y, day_info, error, sparsity_rate, k, gamma):
+    T = X.shape[0]
     d = X.shape[1]
-    W = np.zeros((k, d)) # Initializing the Weight Matrix. W=(4,d), d is depending on the data. k=number of classes
-    
-    error_count = np.zeros(T) 
-    pred = [] # The predicted labels will be stored here
+
+    W = np.zeros((k, d))
+    error_count = np.zeros(T)
+    pred = []
     when_explore = []
 
-    # 2. Evaluative framework (refer to the paper to understand the mathematics)
     for t in range(T):
-        # gamma = gammas[t]  -> author tried dynamic exploit rates?
 
-        #0. initialize if day_info is given:
+        # Day boundary: reset weights (online assumption)
         if day_info is not None and t > 0 and day_info[t] != day_info[t-1]:
             W = np.zeros((k, d))
             logger.info(f"[Banditron/BanditronRP] - Day change detected at t={t}: {day_info[t-1]} -> {day_info[t]}, resetting weights")
 
-        #1. define even probability distribution across all classes
-        p = [gamma/k for i in range(k)]
-        #2. infer class and retrieve the index for the label
-        y_hat = np.argmax(np.dot(W, X[t]))
-        #3. add the bias for selected label by the current model
-        p[y_hat] = p[y_hat] + 1 - gamma
-        #4. choose actual label for the output depending on the probability distribution
-        y_tilde = np.random.choice(range(k), p=p)
-        #5. save predicted label for both explored label and greedy label
-        pred.append(y_tilde)
+        x_t = X[t]
 
+        p = [gamma / k for _ in range(k)]
+        y_hat = int(np.argmax(np.dot(W, x_t)))
+        p[y_hat] = p[y_hat] + 1 - gamma
+        y_tilde = int(np.random.choice(range(k), p=p))
+
+        pred.append(y_tilde)
         when_explore.append(int(y_tilde != y_hat))
-        # print(f"probability for each classes: {p}, y_tilde={y_tilde}, y_hat: {y_hat}")
-        
-        sparsify = np.random.choice([True,False],p=[sparsity_rate,1-sparsity_rate]) #decide if we do weights update
+
+        sparsify = np.random.choice([True, False], p=[sparsity_rate, 1 - sparsity_rate])
         if not sparsify:
-          if y_tilde != y[t]: #if actually selected label is incorrect
-            choice = np.random.choice(range(2),p=[error,1-error])
-            if choice == 1:
-              W[y_hat] = W[y_hat] - X[t] #correct update: only weaken greedy label (according to perceptron update rules) 
+            if y_tilde != y[t]:
+                choice = np.random.choice(range(2), p=[error, 1 - error])
+                if choice == 1:
+                    W[y_hat] = W[y_hat] - x_t
+                else:
+                    W[y_hat] = W[y_hat] - x_t
+                    W[y_tilde] = W[y_tilde] + x_t / p[y_tilde]
             else:
-              W[y_hat] = W[y_hat] - X[t] #error update: strengthen explored label even it was incorrect
-              W[y_tilde] = W[y_tilde] + X[t] / p[y_tilde]      
-          else: #if actually selected label is correct
-            choice = np.random.choice(range(2),p=[error,1-error])
-            if choice == 1:
-              W[y_hat] = W[y_hat] - X[t] #correct update: weaken greedy label and strengthen the explored label
-              W[y_tilde] = W[y_tilde] + X[t] / p[y_tilde]
-            else:
-              W[y_hat] = W[y_hat] - X[t] #incorrect update: don't update correct explored label, only incorrect greedy label
+                choice = np.random.choice(range(2), p=[error, 1 - error])
+                if choice == 1:
+                    W[y_hat] = W[y_hat] - x_t
+                    W[y_tilde] = W[y_tilde] + x_t / p[y_tilde]
+                else:
+                    W[y_hat] = W[y_hat] - x_t
 
     return pred, when_explore, gamma
 
@@ -114,12 +104,16 @@ paper to understand the physical significance). k denotes the number of classes 
 fixed at 4 for our experiments. X denotes the spike count data (observation -- input dataset) 
 and y denotes the true labels associated with each observation (X) 
 '''
+
+
 def banditronRP(X, y, day_info, error, sparsity_rate, k, gamma):
     d = X.shape[1]
     Wrand = np.random.uniform(size=(k,d)) # The random Weight matrix generated from a normal distribution.
     f = sigmoid(np.dot(Wrand,X.T)) # The non-linear projection vector input to the hidden layer.
     pred, when_explore, gamma = banditron(f.T, y, day_info, error, sparsity_rate, k=2, gamma=gamma) # f(t) = Sigmoid(Wrand.x(t)) is given as an input to the Banditron.
     return pred, when_explore, gamma
+
+
 
 # Defining the HRL function (Three Layered Network)
 # Initializing the weight matrices
@@ -141,52 +135,62 @@ and y denotes the true labels associated with each observation (X)
 '''  
 def HRL(X, y, day_info, muH, muO, num_nodes, error, sparsity_rate):
     T = X.shape[0]
-    W = [0]*(len(num_nodes)-1) #here W is just one dimension list
+    d = X.shape[1]
+
+    # copy num_nodes to avoid in-place modification
+    nodes = list(num_nodes)
+    nodes[0] = d 
+
+    # bias is inserted => +1
+    nodes0_with_bias = nodes[0] + 1
+
+    W = [0] * (len(nodes) - 1)
     pred = []
-    num_nodes[0] = num_nodes[0]+1
 
-    # print("W: ", np.array(W).shape, num_nodes) #(1,) [97, 2](original is [96, 2])
-    
-    # Initializing the weight matrices.
-    for i in range(1,len(num_nodes)):
-      W[i-1] = initialize(num_nodes[i-1],num_nodes[i]) #give initial weight ranging from -1 to 1, return 2d list
-      # print("W: ", i, np.array(W).shape, num_nodes) #(2, 97) [97, 2]
+    # init weights (same style as original HRL initialize())
+    # first layer expects nodes0_with_bias
+    W[0] = initialize(nodes0_with_bias, nodes[1])
+    for i in range(2, len(nodes)):
+        W[i - 1] = initialize(nodes[i - 1], nodes[i])
 
-    # print("weight side for Hebbian RL: ", np.array(W).shape) #(2, 97), additional 1 is just due to numpy format?
-    # print(W[0].shape) #(2, 97)
-    # print("len(W) =", len(W))
-    # for li, Wi in enumerate(W):
-    #     print(f"W[{li}].shape =", np.array(Wi).shape)
-    
-    # Computing the output for the hidden layer and output layer.
     for t in range(T):
-      x = np.insert(X[t],0,1) #increase shape here, adding bias as constantly 1
-      out = [x.reshape(-1,1)]*(len(num_nodes)) #-> (97, 1)*2 = (2, 97)
-      for i in range(1,len(num_nodes)):
-        out[i] = np.tanh(np.dot(W[i-1],out[i-1])) #-> (2, 97)*(97, 1) -> (2,1)
-        # print("np.tanh(np.dot(W[i-1],out[i-1])): ", out[i-1].shape, np.tanh(np.dot(W[i-1],out[i-1]))) #-> (2,1), [[-0.99991325] [ 0.99999999]]
-      
-      # Evaluative framework (refer to the paper to understand the mathematics)
-      out[-1] = np.tanh(np.dot(W[-1],np.sign(out[-2])))
-      yhat = np.argmax(out[-1])
-      sparsify = np.random.choice([True,False],p=[sparsity_rate,1-sparsity_rate])
-      if not sparsify:
-        if yhat == y[t]:
-          f = np.random.choice([-1,1],p=[error,1-error])
-        else:
-          f = np.random.choice([1,-1],p=[error,1-error])
-        dW = [0]*(len(num_nodes)-1)
-  
-        for i in range(1,len(num_nodes)):
-          dW[i-1] = muH*f*(np.dot((np.sign(out[i])-out[i]),out[i-1].T)) + muH*(1-f)*(np.dot((1-np.sign(out[i])-out[i]),out[i-1].T))
-          W[i-1] = W[i-1] + dW[i-1]
 
-        dW[-1] = muO*f*(np.dot((np.sign(out[-1])-out[-1]),out[-2].T)) + muO*(1-f)*(np.dot((1-np.sign(out[-1])-out[-1]),out[-2].T))
-        W[-1] = W[-1] + dW[-1]
+        if day_info is not None and t > 0 and day_info[t] != day_info[t-1]:
+            W[0] = initialize(nodes0_with_bias, nodes[1])
+            for i in range(2, len(nodes)):
+                W[i - 1] = initialize(nodes[i - 1], nodes[i])
 
-      pred.append(yhat)
-      
+        x_feat = X[t]
+        x = np.insert(x_feat, 0, 1)  # add bias
+        out = [x.reshape(-1, 1)] * (len(nodes))
+
+        for i in range(1, len(nodes)):
+            out[i] = np.tanh(np.dot(W[i - 1], out[i - 1]))
+
+        out[-1] = np.tanh(np.dot(W[-1], np.sign(out[-2])))
+        yhat = int(np.argmax(out[-1]))
+
+        sparsify = np.random.choice([True, False], p=[sparsity_rate, 1 - sparsity_rate])
+        if not sparsify:
+            if yhat == y[t]:
+                f = np.random.choice([-1, 1], p=[error, 1 - error])
+            else:
+                f = np.random.choice([1, -1], p=[error, 1 - error])
+
+            dW = [0] * (len(nodes) - 1)
+            for i in range(1, len(nodes)):
+                dW[i - 1] = muH * f * (np.dot((np.sign(out[i]) - out[i]), out[i - 1].T)) + \
+                            muH * (1 - f) * (np.dot((1 - np.sign(out[i]) - out[i]), out[i - 1].T))
+                W[i - 1] = W[i - 1] + dW[i - 1]
+
+            dW[-1] = muO * f * (np.dot((np.sign(out[-1]) - out[-1]), out[-2].T)) + \
+                     muO * (1 - f) * (np.dot((1 - np.sign(out[-1]) - out[-1]), out[-2].T))
+            W[-1] = W[-1] + dW[-1]
+
+        pred.append(yhat)
+
     return pred, None, None
+
 
 # Defining the AGREL function (Three Layered Network)
 # Initializing the weight matrices
@@ -208,64 +212,62 @@ X denotes the spike count data (observation -- input dataset) and y denotes the 
 ''' 
 def AGREL(X, y, day_info, error, sparsity_rate, gamma, alpha, beta, num_nodes):
     T = X.shape[0]
+    d = X.shape[1]
+
+    nodes = list(num_nodes)
+    nodes[0] = d 
+
     pred = []
-    
-
     when_explore = []
-    # Initializing the weight matrices.
-    W_H = initialize(num_nodes[0]+1,num_nodes[1])
-    W_O = initialize(num_nodes[1],num_nodes[2])
 
-    
+    # W_H expects (input+1) because bias is inserted
+    W_H = initialize(nodes[0] + 1, nodes[1])
+    W_O = initialize(nodes[1], nodes[2])
 
     for t in range(T):
 
-      if day_info is not None and t > 0 and day_info[t] != day_info[t-1]:
-        W_H = initialize(num_nodes[0]+1,num_nodes[1])
-        W_O = initialize(num_nodes[1],num_nodes[2])
-      
-      x = np.insert(X[t],0,1).reshape(-1,1) 
-      y_H = sigmoid(np.dot(W_H,x))
-      Z = np.dot(W_O,y_H)
-      y_O = softmax(Z)
-      yhat = np.argmax(y_O)
-      
-      # Computing the output for the hidden layer and output layer.
-      outs = np.zeros(Z.shape)
-      outs[yhat] = 1
-      explore = np.random.uniform()<gamma 
-      when_explore.append(explore)
-      # Evaluative framework (refer to the paper to understand the mathematics)
-      if explore:
-        y_tilde = np.random.randint(low=0,high=num_nodes[-1])
-      else:
-        y_tilde = yhat
-      sparsify = np.random.choice([True,False],p=[sparsity_rate,1-sparsity_rate])
-      if not sparsify:
-        if y_tilde == y[t]:
-          delta = np.random.choice([-1 ,1 - float(outs[y_tilde])],p=[error,1-error])
-        else:
-          delta = np.random.choice([-1 ,1 - float(outs[y_tilde])],p=[1-error,error])
-        '''
-        In AGREL, δ therefore influences plasticity through
-        an expansive function f (δ), which also helps to fasten
-        the learning process. f (δ) is defined such as, it takes
-        large values if δ is close to 1, that is, when actions are
-        rewarded unexpectedly.
-        '''
-        if delta >= 0:
-          f = delta/(1-delta+1e-4) 
-        else:
-          f = delta
-        # Weight updation policy of AGREL
-        dW_O = beta*f*y_H.T
-        dW_H = alpha*f*np.dot((y_H*(1-y_H)*W_O[y_tilde,:].reshape(-1,1)),x.T)
+        if day_info is not None and t > 0 and day_info[t] != day_info[t-1]:
+            W_H = initialize(nodes[0] + 1, nodes[1])
+            W_O = initialize(nodes[1], nodes[2])
 
-        W_O[y_tilde,:] = W_O[y_tilde,:] + dW_O
-        W_H = W_H + dW_H
-        
-      pred.append(yhat)
+        x_feat = X[t]
+        x = np.insert(x_feat, 0, 1).reshape(-1, 1)
+
+        y_H = sigmoid(np.dot(W_H, x))
+        Z = np.dot(W_O, y_H)
+        y_O = softmax(Z)
+        yhat = int(np.argmax(y_O))
+
+        outs = np.zeros(Z.shape)
+        outs[yhat] = 1
+
+        explore = (np.random.uniform() < gamma)
+        when_explore.append(explore)
+
+        y_tilde = int(np.random.randint(low=0, high=nodes[-1])) if explore else yhat
+
+        sparsify = np.random.choice([True, False], p=[sparsity_rate, 1 - sparsity_rate])
+        if not sparsify:
+            if y_tilde == y[t]:
+                delta = np.random.choice([-1, 1 - float(outs[y_tilde])], p=[error, 1 - error])
+            else:
+                delta = np.random.choice([-1, 1 - float(outs[y_tilde])], p=[1 - error, error])
+
+            if delta >= 0:
+                f = delta / (1 - delta + 1e-4)
+            else:
+                f = delta
+
+            dW_O = beta * f * y_H.T
+            dW_H = alpha * f * np.dot((y_H * (1 - y_H) * W_O[y_tilde, :].reshape(-1, 1)), x.T)
+
+            W_O[y_tilde, :] = W_O[y_tilde, :] + dW_O
+            W_H = W_H + dW_H
+
+        pred.append(yhat)
+
     return pred, when_explore, gamma
+
 
 # Defining the DQN function (Four Layered Network)
 # Defining the DQN model
@@ -291,7 +293,7 @@ denotes the exploration constant and discount factor. X denotes the spike count 
 (observation -- input dataset) and y denotes the true labels associated with each observation (X). 
 '''
 # def DQN(X,Y,epsilon,gamma,error,sparsity_rate):
-def DQN(X,Y,error,sparsity_rate,epsilon,gamma):
+def DQN(X,Y,day_info, error,sparsity_rate,epsilon,gamma):
 
   inp_shp = X.shape[1] # Number of electrodes --> corresponding to the no. of neurons in the first layer.
   model = get_DQN_model(inp_shp)
@@ -299,12 +301,20 @@ def DQN(X,Y,error,sparsity_rate,epsilon,gamma):
   scaler = StandardScaler()
   X_norm = scaler.fit_transform(X)
   pred = []
+  when_explore = []
   
   # Evaluative framework (refer to the paper to understand the mathematics)
+  logger.info(f"each shape: {X_norm.shape}, {Y.shape}, {Y[:10]}")
+  #each shape: (10000, 96), (10000,)
+
   for t in range(T):
+    if t % 10 == 0 or t == T - 1:
+      logger.info(f"\r[DQN] Processing step {t+1}/{T}")
+
     x = X_norm[t,:].reshape(1,X.shape[1]).astype(np.float32)
-    y = Y[t,:].reshape(1,Y.shape[1])
-    Q = model.predict(x)
+    # y = Y[t,:].reshape(1,Y.shape[1])
+    y_true = Y[t]
+    Q = model.predict(x, verbose=0)
 
     yhat = np.argmax(Q)
     explore = np.random.uniform() < epsilon
@@ -314,7 +324,8 @@ def DQN(X,Y,error,sparsity_rate,epsilon,gamma):
       ytilde = yhat
     sparsify = np.random.choice([True,False],p=[sparsity_rate,1-sparsity_rate])
     if not sparsify:
-      if ytilde == np.argmax(y):
+      # if ytilde == np.argmax(y):
+      if ytilde == y_true:
         r = np.random.choice([-1 ,1],p=[error,1-error])
       else:
         r = np.random.choice([1 ,-1],p=[error,1-error])
@@ -327,7 +338,10 @@ def DQN(X,Y,error,sparsity_rate,epsilon,gamma):
       model.fit(x,Target_vec,batch_size=1, epochs=1,verbose=0)
 
     pred.append(ytilde)
-  return np.array(pred)
+    when_explore.append(explore)
+
+  return np.array(pred), np.array(when_explore), gamma
+
 
 # Defining the LGBM based Q-Learning Function
 # Building the LGBM Model
@@ -345,40 +359,64 @@ feedback signal (refer to the paper to understand the physical significance). ep
 denotes the exploration constant and discount factor. X denotes the spike count data 
 (observation -- input dataset) and y denotes the true labels associated with each observation (X). 
 '''
-def QLGBM(X,Y,epsilon,gamma,error,sparsity_rate):
+def QLGBM(X, Y, day_info, error, sparsity_rate, epsilon, gamma):
   model = get_QLGBM_model()
   T = X.shape[0]
   scaler = StandardScaler()
   X_norm = scaler.fit_transform(X)
+  
   pred = []
+  when_explore = []
   isFit = False
   
-  # Evaluative framework (refer to the paper to understand the mathematics)
-  for t in range(T-1):
-    x = X_norm[t:t+2,:].astype(np.float32)
-    y = Y[t:t+2,:]
+  # Evaluative framework 
+  for t in range(T):
+    # Clean progress tracker
+    if t % 1000 == 0 or t == T - 1:
+        print(f"\r[QLGBM] Processing step {t+1}/{T}", end="")
+
+    # Trick to keep batch size = 2 for LightGBM's tree splits, even on the last sample
+    if t == T - 1:
+        x = np.vstack([X_norm[t, :], X_norm[t, :]]).astype(np.float32)
+    else:
+        x = X_norm[t:t+2, :].astype(np.float32)
+        
+    # FIX: Correctly index 1D label array
+    y_true = Y[t] 
+    
     if isFit:
       Q = model.predict(x)
     else:
-      # np.random.seed(101)
-      Q = np.random.uniform(low=-1,high=1,size=(2,4))
-    yhat = np.argmax(Q[0,:])
+      Q = np.random.uniform(low=-1, high=1, size=(2, 4))
+    
+    yhat = np.argmax(Q[0, :])
     explore = np.random.uniform() < epsilon
+    
     if explore:
-      ytilde = np.random.randint(low=0,high=4)
+      ytilde = np.random.randint(low=0, high=4)
     else:
       ytilde = yhat
-    sparsify = np.random.choice([True,False],p=[sparsity_rate,1-sparsity_rate])
+      
+    sparsify = np.random.choice([True, False], p=[sparsity_rate, 1-sparsity_rate])
+    
     if not sparsify:
-      if ytilde == np.argmax(y):
-        r = np.random.choice([-1 ,1],p=[error,1-error])
+      # FIX: Compare directly against the integer label instead of using argmax
+      if ytilde == y_true: 
+        r = np.random.choice([-1, 1], p=[error, 1-error])
       else:
-        r = np.random.choice([1 ,-1],p=[error,1-error])
-      Target = r + gamma*np.amax(Q)
+        r = np.random.choice([1, -1], p=[error, 1-error])
+        
+      Target = r + gamma * np.amax(Q)
       Target_vec = Q
-      Target_vec[0,ytilde] = Target
-      Target_vec = np.array(Target_vec).reshape(2,4)
-      model.fit(x,Target_vec)
+      Target_vec[0, ytilde] = Target
+      
+      model.fit(x, Target_vec)
       isFit = True
+      
     pred.append(ytilde)
-  return np.array(pred)
+    when_explore.append(explore)
+
+  print() # Clean newline
+  
+  # FIX: Return all three expected variables and ensure predictions match length T
+  return np.array(pred), np.array(when_explore), gamma

@@ -2,82 +2,55 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os, re, glob
 import colorsys
-from scipy.stats import spearmanr
 from matplotlib.animation import FFMpegWriter
 from pathlib import Path
-
-
+from sklearn.metrics import f1_score, accuracy_score
 
 def load_results_dict(npy_path: str) -> dict:
     if isinstance(npy_path, (tuple, list)):
         npy_path = npy_path[0]
-
-    npy_path = str(Path(npy_path))  # normalize
+    npy_path = str(Path(npy_path))
     obj = np.load(npy_path, allow_pickle=True)
     return obj.item() if hasattr(obj, "item") else obj
 
-def trial_block_means(correct_01: np.ndarray, time_within_trial: np.ndarray, block: int = 10):
-    correct_01 = np.asarray(correct_01).astype(float)
-    time_within_trial = np.asarray(time_within_trial)
 
-    starts = np.where(time_within_trial == 0.0)[0]
-    if len(starts) == 0:
-        raise ValueError("No trial start found: time_within_trial==0.0 is empty.")
-    ends = np.r_[starts[1:], len(time_within_trial)]
-
+def filter_result_paths_by_gamma(pattern, gamma):
+    all_paths = sorted(glob.glob(pattern))
     out = []
-    for s, e in zip(starts, ends):
-        trial = correct_01[s:e]
-        L = len(trial)
-        if L < block:
+    for p in all_paths:
+        base = os.path.basename(p)
+        if "_gamma" not in base:
             continue
-        cut = (L // block) * block
-        trial = trial[:cut]  # drop tail
-        chunk = cut // block
-        out.append(trial.reshape(block, chunk).mean(axis=1))
+        try:
+            gstr = base.split("_gamma", 1)[1].rsplit(".npy", 1)[0]
+        except IndexError:
+            continue
+
+        if gstr == "None" or gamma is None:
+            out.append(p)
+            continue
+        try:
+            gval = float(gstr)
+        except Exception:
+            continue
+
+        if gamma == gval:
+            out.append(p)
+
     return out
 
-def plot_daywise_trial_blocks(res_paths,
-        day_number,
-        time_within_trial,
-        block: int = 10,
-        figsize=(8, 5),
-        max_trials_per_day=None,
-        do_plot=False
-    ):
+
+def plot_daywise_trial_blocks(res_paths, day_number, time_within_trial, block=10, 
+                              figsize=(15, 6), max_trials_per_day=None, do_plot=False,
+                              plot_transition_trials_only=False):
 
     day_number = np.asarray(day_number)
     time_within_trial = np.asarray(time_within_trial)
     unique_days = np.unique(day_number)
 
-    # --- hue spacing that avoids adjacent similar colors (golden ratio step) ---
     def trial_color(t):
         phi = 0.618033988749895
-        h = (t * phi) % 1.0
-        s, v = 0.55, 0.80  # softer
-        return colorsys.hsv_to_rgb(h, s, v)
-
-    # --- block means for arbitrary values (not only correct_01) ---
-    def values_trial_block_means(values: np.ndarray, twt: np.ndarray, block: int):
-        values = np.asarray(values).astype(float)
-        twt = np.asarray(twt)
-
-        starts = np.where(twt == 0.0)[0]
-        if len(starts) == 0:
-            raise ValueError("No trial start found: time_within_trial==0.0 is empty.")
-        ends = np.r_[starts[1:], len(twt)]
-
-        out = []
-        for s, e in zip(starts, ends):
-            trial = values[s:e]
-            L = len(trial)
-            if L < block:
-                continue
-            cut = (L // block) * block
-            trial = trial[:cut]
-            chunk = cut // block
-            out.append(trial.reshape(block, chunk).mean(axis=1))
-        return out
+        return colorsys.hsv_to_rgb((t * phi) % 1.0, 0.55, 0.80)
 
     collected_seeds = []
 
@@ -89,310 +62,286 @@ def plot_daywise_trial_blocks(res_paths,
         y_pred = np.asarray(res["prediction"]["y_pred"])
         collected.setdefault(model, [])
 
-        if not (len(y_true) == len(y_pred) == len(day_number) == len(time_within_trial)):
-            raise ValueError(
-                f"Length mismatch: y_true={len(y_true)}, y_pred={len(y_pred)}, "
-                f"day_number={len(day_number)}, time_within_trial={len(time_within_trial)}"
-            )
-
         correct_01 = (y_true == y_pred).astype(int)
+        num_target_classes = len(np.unique(y_true))
+        w = 1.0 / num_target_classes
 
-        # map class-id -> coarse position in [0,1] using number of predicted classes
-        classes = np.unique(y_pred)
-        K = len(classes)
-        w = 1.0 / K
+        if do_plot:
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharey=False)
+            global_x_ax1 = 0
+
+        trials_processed_total = 0
 
         for day in unique_days:
             idx = (day_number == day)
-            c_day = correct_01[idx]
-            twt_day = time_within_trial[idx]
+            c_day, twt_day = correct_01[idx], time_within_trial[idx]
             ytrue_day = y_true[idx]
             ytrue_pos_day = (ytrue_day.astype(float) + 0.5) * w
 
-            # per-trial block means
-            trial_means = trial_block_means(c_day, twt_day, block=block)                # accuracy(0/1) block mean
-            ytrue_means = values_trial_block_means(ytrue_pos_day, twt_day, block=block) # y_true position block mean
+            starts = np.where(twt_day == 0.0)[0]
+            if len(starts) == 0: continue
+            ends = np.r_[starts[1:], len(twt_day)]
 
-            if max_trials_per_day is not None:
-                trial_means = trial_means[:max_trials_per_day]
-                ytrue_means = ytrue_means[:max_trials_per_day]
+            y_concat, dpos, dacc, dpos_boundary, dacc_boundary = [], [], [], [], []
+            prev_last_m, prev_last_yt = None, None
+            trials_this_day = 0
 
-            n_trials = min(len(trial_means), len(ytrue_means))
-            # print(f"day: {day}, number of trials: {n_trials}")
-            if n_trials == 0:
-                continue
-            
-            if do_plot:
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=figsize, sharey=False)
+            for s, e in zip(starts, ends):
+                if max_trials_per_day and trials_this_day >= max_trials_per_day: break
 
-            # ---------- subplot 1: concatenated across trials ----------
-            x_offset = 0
-            y_concat = []
-            yt_concat = []
+                trial_y = ytrue_day[s:e]
+                if plot_transition_trials_only and len(np.unique(trial_y)) < num_target_classes:
+                    continue 
 
-            # save for the post performance correlation analysis (exclude trial boundary)
-            dpos = []  # within-trial position change
-            dacc = []  # within-trial accuracy change
+                trial_c, trial_pos = c_day[s:e], ytrue_pos_day[s:e]
+                L = len(trial_c)
+                if L < block: continue
+                
+                cut = (L // block) * block
+                chunk = cut // block
+                m = trial_c[:cut].reshape(block, chunk).mean(axis=1)
+                yt = trial_pos[:cut].reshape(block, chunk).mean(axis=1)
 
-            # save for the post performance correlation analysis (trial boundary only)
-            dpos_boundary = []  # boundary position change (end of trial -> start of next trial)
-            dacc_boundary = []  # boundary accuracy change (end of trial -> start of next trial)
-
-            prev_last_m = None
-            prev_last_yt = None
-
-            for t in range(n_trials):
-                m = np.asarray(trial_means[t], dtype=float)  # shape: (n_blocks,), block-averaged performance for trial t
-                yt = np.asarray(ytrue_means[t], dtype=float) # shape: (n_blocks,), block-averaged true label/positions for trial t
-                L = min(len(m), len(yt))
-                m = m[:L]
-                yt = yt[:L]
-                if L == 0:
-                    continue
-
-                # plot colored trial segment (accuracy)
-                x = np.arange(L) + x_offset
                 if do_plot:
-                    ax1.plot(x, m, color=trial_color(t), linewidth=1.2, alpha=0.9)
+                    x1 = np.arange(block) + global_x_ax1
+                    ax1.plot(x1, m, color=trial_color(trials_processed_total), linewidth=1.2, alpha=0.9)
+                    ax1.plot(x1, yt, linestyle="--", color="gray", linewidth=1.5, alpha=0.4)
+                    
+                    x2 = np.arange(block)
+                    ax2.plot(x2, m, color=trial_color(trials_processed_total), linewidth=0.8, alpha=0.6)
+                    global_x_ax1 += block
 
                 y_concat.append(m)
-                yt_concat.append(yt)
-                x_offset += L
-
-                # --- trial boundary effect (end of previous trial -> start of current trial) ---
                 if prev_last_m is not None:
-                    dpos_boundary.append(abs(yt[0] - prev_last_yt)) #meaning the positon at first value in current trial
-                    dacc_boundary.append(m[0] - prev_last_m) #take gap between last block mean of previous trial and first block mean of current trial
+                    dpos_boundary.append(abs(yt[0] - prev_last_yt))
+                    dacc_boundary.append(m[0] - prev_last_m)
 
-                # --- within-trial deltas (no boundary) ---
-                if L >= 2:
+                if block >= 2:
                     dpos.extend(np.abs(np.diff(yt)).tolist())
                     dacc.extend(np.diff(m).tolist())
 
-                # store last point for next boundary calculation
-                prev_last_m = m[-1] #save extracted trial's last block mean
-                prev_last_yt = yt[-1]
+                prev_last_m, prev_last_yt = m[-1], yt[-1]
+                trials_this_day += 1
+                trials_processed_total += 1
 
-            # if len(y_concat) == 0:
-            #     plt.close(fig)
-            #     continue
+            if do_plot and trials_this_day > 0:
+                ax1.axvline(x=global_x_ax1, color='red', linestyle='--', linewidth=1.5, alpha=0.8)
+                ax1.text(global_x_ax1, 1.05, f"Day {day}", color='red', fontsize=8, ha='center')
 
-            # add gray y_true line (same block-averaged & concatenated)
-            yt_concat = np.concatenate(yt_concat) # flatten all -> all values are consequensed
+            if len(y_concat) > 0:
+                collected[model].append({
+                    "acc_block": np.array(y_concat),
+                    "acc_block_mean": np.mean(np.concatenate(y_concat)),
+                    "day": int(day),
+                    "dpos": np.array(dpos, dtype=float),
+                    "dacc": np.array(dacc, dtype=float),
+                    "dpos_boundary": np.array(dpos_boundary, dtype=float),
+                    "dacc_boundary": np.array(dacc_boundary, dtype=float),
+                })
 
-            # within-trial (no boundary)
-            dpos = np.asarray(dpos, dtype=float)  # position change
-            dacc = np.asarray(dacc, dtype=float)  # accuracy change
+        if do_plot:
+            mode_title = "Transition Trials ONLY" if plot_transition_trials_only else "All Trials"
+            ax1.set_title(f"{model} | Continuous Timeline Across All Days | {mode_title}")
+            ax1.set_xlabel("Concatenated block index")
+            ax1.set_ylabel("Block mean accuracy")
+            ax1.set_ylim(-0.05, 1.15)
+            ax1.grid(True, alpha=0.25)
 
-            # trial-boundary only
-            dpos_boundary = np.asarray(dpos_boundary, dtype=float)
-            dacc_boundary = np.asarray(dacc_boundary, dtype=float)
+            ax2.set_title(f"{model} | Average shape of a trial (Overlay)")
+            ax2.set_xlabel("Block index within trial")
+            ax2.set_ylabel("Accuracy (mean)")
+            ax2.set_ylim(-0.05, 1.05)
+            ax2.grid(True, alpha=0.5)
 
-            collected[model].append({
-                "acc_block": np.array(y_concat),
-                "acc_block_mean": np.mean(np.concatenate(y_concat)),
-                "day": int(day),
-                "dpos": dpos, #withi-trial position change
-                "dacc": dacc, #within-trial accuracy change
-                "dpos_boundary": dpos_boundary, #trial-boundary position change
-                "dacc_boundary": dacc_boundary, #trial-boundary accuracy change
-            })
-
-            if do_plot:
-                # y_pos (block-averaged, concatenated) on the same axis
-                ax1.plot(range(len(yt_concat)), yt_concat, linestyle="--", color="red", linewidth=1.2, alpha=0.85)
-
-                ax1.set_title(f"{model} | Day {day}  (trials={n_trials}, blocks/trial={block})")
-                ax1.set_xlabel("Concatenated block index across trials")
-                ax1.set_ylabel("Block mean")
-                ax1.set_ylim(-0.05, 1.05)
-                ax1.grid(True, alpha=0.25)
-
-                # ---------- subplot 2: per-trial vs block index ----------
-                for t in range(n_trials):
-                    m = np.asarray(trial_means[t], dtype=float)
-                    x = np.arange(len(m))  # IMPORTANT: match actual length (prevents broken lines)
-                    ax2.plot(x, m, color=trial_color(t), linewidth=0.8, alpha=0.8)
-
-                ax2.set_xlabel("Block index within trial")
-                ax2.set_ylabel("Accuracy (mean)")
-                ax2.set_ylim(-0.05, 1.05)
-                ax2.grid(True, alpha=0.5)
-
-                plt.tight_layout()
-                plt.show()
+            plt.tight_layout()
+            plt.show()
 
         collected_seeds.append(collected)
 
     return collected_seeds
 
 
+# ========================================================
+# NEW: EVENT-ALIGNED RECOVERY CURVE (GOLD STANDARD)
+# ========================================================
 
-def plot_4models_daily_mean_std(results_dir, finger, shift, models, gamma_mode=None, ylim=(0,1), title=None):
+def plot_event_aligned_recovery(model_paths_dict, time_within_trial, pre_window=15, max_post_window=100):
     """
-    Simple version.
-    - Split by gamma==0 vs gamma!=0 (gamma parsed from filename and converted to float).
-    - HRL is treated as gamma=None and included ONLY when gamma_nonzero=False.
-    - Prints the final files used for each model.
+    ポジション変化直後の適応をプロットします。
+    「一番短いトライアル」を見つけ出し、すべてのデータをその長さに切り揃えることで、
+    データを捨てることなく、生存バイアス（N数の変動）を完全に防ぎます。
     """
-    pat = re.compile(r"results_(?P<finger>[^_]+)_(?P<model>[^_]+)_shift(?P<shift>-?\d+)_seed(?P<seed>\d+)_gamma(?P<gamma>.+)\.npy$")
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+    
+    mid_events = {m: [] for m in model_paths_dict.keys()}
+    bound_events = {m: [] for m in model_paths_dict.keys()}
+    
+    # すべてのイベントの中で「最も短いトライアルの残り長さ」を記録する変数
+    global_min_post_mid = max_post_window
+    global_min_post_bound = max_post_window
+    
+    for model_name, res_paths in model_paths_dict.items():
+        for path in res_paths:
+            res = load_results_dict(path)
+            y_true = np.asarray(res["prediction"]["y_true"])
+            y_pred = np.asarray(res["prediction"]["y_pred"])
+            
+            transitions = np.where(y_true[1:] != y_true[:-1])[0] + 1
+            
+            for t in transitions:
+                # ① 変化後のデータが「次のトライアル開始」までに何サンプルあるか(post_len)を計算
+                max_fwd = min(max_post_window, len(y_true) - t)
+                post_len = max_fwd
+                for i in range(1, max_fwd):
+                    if time_within_trial[t + i] == 0.0:
+                        post_len = i  # 次のトライアルの直前までの長さを取得
+                        break
 
-    runs = {m: [] for m in models}  # model -> list of (path, day_dict)
+                min_required_post = 5
+                if post_len < min_required_post:
+                    continue
+                
+                # ② 変化前のデータが「現在のトライアル開始」から何サンプルあるか(pre_len)を計算
+                max_bwd = min(pre_window, t)
+                pre_len = max_bwd
+                if time_within_trial[t] != 0.0:
+                    for i in range(1, max_bwd + 1):
+                        if time_within_trial[t - i] == 0.0:
+                            pre_len = i - 1
+                            break
+                
+                # 変化前のベースライン(Hold)が確保できない極端に早すぎるイベントのみ除外
+                if pre_len < pre_window:
+                    continue
+                    
+                # 必要な長さだけ正確にスライスしてAccuracyを計算
+                window_true = y_true[t - pre_window : t + post_len]
+                window_pred = y_pred[t - pre_window : t + post_len]
+                acc = (window_true == window_pred).astype(float)
+                
+                if time_within_trial[t] == 0.0:
+                    bound_events[model_name].append(acc)
+                    global_min_post_bound = min(global_min_post_bound, post_len)
+                else:
+                    # 壊れた時計（まぐれ当たり）を防ぐため、移動前の正解率が50%以上のものだけを採用
+                    pre_transition_acc = np.mean(acc[:pre_window])
+                    if pre_transition_acc > 0.5:
+                        mid_events[model_name].append(acc)
+                        global_min_post_mid = min(global_min_post_mid, post_len)
 
-    for f in sorted(glob.glob(os.path.join(results_dir, "results_*.npy"))):
-        m = pat.match(os.path.basename(f))
-        if not m:
-            continue
-        gd = m.groupdict()
-        if gd["finger"] != finger or int(gd["shift"]) != int(shift):
-            continue
-
-        model = gd["model"]
-        if model not in runs:
-            continue
-
-        # gamma filter
-        if model == "HRL":
-            if gamma_mode is True:   # gamma!=0 mode excludes HRL
-                continue
-            # gamma==0 mode includes HRL
-        else:
-            try:
-                gval = float(gd["gamma"])  # "0.00" -> 0.0
-            except Exception:
-                continue
-            if gamma_mode is True and gval == 0.0:
-                continue
-            if gamma_mode is False and gval != 0.0:
-                continue
-
-        res = np.load(f, allow_pickle=True).item()
-        d = res["performance"]["day_to_accs"]
-
-        # normalize to {day:int -> acc:float}
-        day_dict = {}
-        items = d.items() if isinstance(d, dict) else enumerate(d)
-        for k, v in items:
-            if isinstance(v, (list, tuple, np.ndarray)):
-                v = float(np.nanmean(np.asarray(v, dtype=float)))
-            else:
-                v = float(v)
-            day_dict[int(k)] = v
-
-        runs[model].append((f, day_dict))
-
-    # print final used files
-    mode_str = "gamma!=0 (HRL excluded)" if gamma_mode is True else "gamma==0 (HRL included)"
-
-    print(f"\nUsed files | finger={finger}, shift={shift}, mode={mode_str}")
-    for model in models:
-        print(f"{model}: {len(runs[model])} files")
-        for p, _ in runs[model]:
-            print("  -", p)
-
-    # plot
-    plt.figure(figsize=(8, 4.5))
-    any_plotted = False
-
-    for model in models:
-        day_dicts = [dd for _, dd in runs[model]]
-        if not day_dicts:
-            continue
-
-        days = sorted({day for dd in day_dicts for day in dd.keys()})
-        mean, std = [], []
-
-        for day in days:
-            vals = [dd[day] for dd in day_dicts if day in dd and np.isfinite(dd[day])]
-            if len(vals) == 0:
-                mean.append(np.nan); std.append(np.nan)
-            elif len(vals) == 1:
-                mean.append(float(vals[0])); std.append(0.0)
-            else:
-                mean.append(float(np.mean(vals)))
-                std.append(float(np.std(vals, ddof=1)))
-
-        x = np.array(days)
-        y = np.array(mean, float)
-        s = np.array(std, float)
-        ok = np.isfinite(y)
-
-        plt.plot(x[ok], y[ok], label=f"{model} (n={len(day_dicts)} files)")
-        plt.fill_between(x[ok], y[ok]-s[ok], y[ok]+s[ok], alpha=0.2)
-        any_plotted = True
-
-    if not any_plotted:
-        raise ValueError("No files matched after filtering.")
-
-    plt.xlabel("Day")
-    plt.ylabel("Accuracy")
-    plt.ylim(*ylim)
-    plt.grid(alpha=0.3)
-    if title is None:
-        title = f"Daily mean±std | finger={finger}, shift={shift} | {mode_str}"
-    plt.title(title)
-    plt.legend(fontsize=8)
+    # --- すべての配列を「最も短い長さに切り揃えて」平均化・プロット ---
+    for ax, events_dict, min_post, title in zip(
+        [ax1, ax2], 
+        [mid_events, bound_events], 
+        [global_min_post_mid, global_min_post_bound],
+        ["Mid-Trial Adaptation", "Cross-Trial Reset Tolerance"]
+    ):
+        # 描画するx軸も「最小の長さ」に合わせる
+        x_axis = np.arange(-pre_window, min_post)
+        
+        for model_name, ev_list in events_dict.items():
+            if len(ev_list) > 0:
+                trimmed = [arr[:pre_window + min_post] for arr in ev_list]
+                avg_acc = np.mean(trimmed, axis=0)
+                std_acc = np.std(trimmed, axis=0)
+                
+                # Plot the mean line and capture the color
+                line, = ax.plot(x_axis, avg_acc, label=f"{model_name} (N={len(trimmed)})", linewidth=2)
+                
+                # Add the shaded variance region
+                ax.fill_between(x_axis, 
+                                np.clip(avg_acc - std_acc, 0, 1), 
+                                np.clip(avg_acc + std_acc, 0, 1), 
+                                color=line.get_color(), alpha=0.2)
+                
+        ax.axvline(x=0, color='black' if ax==ax1 else 'red', linestyle='--', linewidth=2)
+        ax.set_xlim(-pre_window, min_post - 1)
+        ax.set_ylim(0, 1.05)
+        ax.set_xlabel("Samples Relative to Transition")
+        ax.set_ylabel("Average Accuracy")
+        ax.set_title(f"{title}\n(Truncated to min valid length: {min_post} samples)")
+        ax.legend(loc="lower right")
+        ax.grid(True, alpha=0.3)
+        
+    plt.suptitle("RL Model Event-Aligned Recovery Curve (Constant-N, No Dropped Data)", fontsize=14, fontweight='bold')
     plt.tight_layout()
     plt.show()
 
 
-
-
-def save_shift_video_mp4(results_dir, out_mp4_path, finger="idx",
-                         shifts=(0,1,3,5,7,9,11),
-                         models=("banditron","banditronRP","HRL","AGREL"),
-                         ylim=(0,1), secs_per_frame=0.5, gamma_mode=None):
-
-    if not out_mp4_path.endswith(".mp4"):
-        raise ValueError("out_mp4_path must end with .mp4")
-
-    fps = max(1, int(round(1.0 / float(secs_per_frame))))
-
-    # ★幅/高さが偶数になるようにする（例: 1200x674）
-    dpi = 100
-    fig = plt.figure(figsize=(12, 6.74), dpi=dpi)  # 12*100=1200, 6.74*100=674
-    ax = fig.add_subplot(111)
-
-    writer = FFMpegWriter(fps=fps)
-
-    os.makedirs(os.path.dirname(out_mp4_path) or ".", exist_ok=True)
-
-    with writer.saving(fig, out_mp4_path, dpi=dpi):
-        for sh in shifts:
-            models_daily_mean_std(results_dir, finger=finger, shift=sh,
-                                        models=list(models), ylim=ylim, ax=ax, gamma_mode=gamma_mode)
-            fig.tight_layout()
-            writer.grab_frame()
-
-    plt.close(fig)
-    print("Saved:", out_mp4_path)
-
-
-def filter_result_paths_by_gamma(pattern, gamma_mode):
-
-    all_paths = sorted(glob.glob(pattern))
-
-    out = []
-    for p in all_paths:
-        base = os.path.basename(p)
-        if "_gamma" not in base:
+def plot_continuous_performance(model_paths_dict, day_number, resolution=10000, metric="f1"):
+    """
+    Plots the continuous performance of the models across the entire dataset.
+    resolution: Number of data points (samples) to group together.
+    metric: "f1" for Macro F1-Score, or "accuracy" for standard Accuracy.
+    """
+    plt.figure(figsize=(15, 6))
+    
+    day_number = np.asarray(day_number)
+    day_changes = np.where(day_number[1:] != day_number[:-1])[0] + 1
+    day_starts = np.insert(day_changes, 0, 0)
+    unique_days = np.unique(day_number)
+    
+    for model_name, res_paths in model_paths_dict.items():
+        if not res_paths:
             continue
+            
+        model_curves = []
+        
+        for path in res_paths:
+            res = load_results_dict(path)
+            y_true = np.asarray(res["prediction"]["y_true"])
+            y_pred = np.asarray(res["prediction"]["y_pred"])
+            
+            n_samples = len(y_true)
+            n_bins = int(np.ceil(n_samples / resolution))
+            
+            curve = []
+            for i in range(n_bins):
+                start = i * resolution
+                end = min((i + 1) * resolution, n_samples)
+                
+                chunk_true = y_true[start:end]
+                chunk_pred = y_pred[start:end]
+                
+                # --- METRIC SWITCHER ---
+                if metric.lower() == "accuracy":
+                    score = accuracy_score(chunk_true, chunk_pred)
+                else:
+                    score = f1_score(chunk_true, chunk_pred, average='macro', zero_division=0)
+                    
+                curve.append(score)
+                
+            model_curves.append(curve)
+        
+        avg_curve = np.mean(model_curves, axis=0)
+        std_curve = np.std(model_curves, axis=0) 
+        
+        x_axis = np.arange(len(avg_curve)) * resolution 
+        
+        # Plot the mean line and capture the color
+        line, = plt.plot(x_axis, avg_curve, label=model_name, linewidth=1.5, alpha=0.8)
+        
+        # Add the shaded variance region using the exact same color
+        plt.fill_between(x_axis, 
+                         np.clip(avg_curve - std_curve, 0, 1), # Clip at 0 and 1 so it doesn't spill off the graph
+                         np.clip(avg_curve + std_curve, 0, 1), 
+                         color=line.get_color(), alpha=0.2)
+    
+    # --- X-AXIS FORMATTING ---
+    tick_indices = np.arange(0, len(unique_days), 10)
+    tick_positions = day_starts[tick_indices]
+    tick_labels = unique_days[tick_indices].astype(int)
+    
+    plt.xticks(tick_positions, tick_labels)
 
-        gstr = base.split("_gamma", 1)[1].rsplit(".npy", 1)[0]  # "0.0", "0.02", "None"
-
-        #for HRL
-        if gstr == "None":
-            out.append(p)
-            continue
-
-        try:
-            gval = float(gstr)
-        except Exception:
-            continue
-
-        if gamma_mode and gval != 0.0:
-            out.append(p)
-        elif not gamma_mode and gval == 0.0:
-            out.append(p)
-
-    return out
+    # --- DYNAMIC TITLES ---
+    metric_label = "Accuracy" if metric.lower() == "accuracy" else "Macro F1-Score"
+    
+    plt.title(f"Continuous {metric_label} over Time (Resolution: {resolution} samples/point)", fontsize=14, fontweight='bold')
+    plt.xlabel("Recorded Days")
+    plt.ylabel(metric_label)
+    plt.ylim(0, 1.05) 
+    plt.legend(loc="lower right")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()

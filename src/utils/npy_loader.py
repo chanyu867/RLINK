@@ -244,9 +244,15 @@ def plot_position_per_day(acc_days, time_info, data, break_day=None, figsize=(12
 #How to run
 # ------- Combined data ------- #
 # data for finger IDX
+# time_within_trial = npy_loader("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_bin.npy")
+# count_1 = time_within_trial[time_within_trial==0.0] #count how many trials are there
+# print("count_1: ", len(count_1)) #117000
+
+# target = npy_loader("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/target_style.npy")
+# print("target unique: ", np.unique(target), target.shape) #(4,) (234000
 # sbp_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/mrs/sbp_with_mrs_position_min0.15_max0.85.npy"
 # data = npy_loader(sbp_path)
-# # print("data: ", data[:500, -1])
+# print("data: ", data[:500, -1])
 
 # data = npy_loader("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/time_data/day_number.npy")
 # # mask = npy_loader("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/classes_dir/masks/idx_position_mask_0.2_0.4_0.6_0.8_shift20.npy")

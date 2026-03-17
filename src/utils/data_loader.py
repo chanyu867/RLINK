@@ -331,7 +331,7 @@ if __name__ == "__main__":
     mode = "position" # "position" or "velocity"
     # boundaries = [0.2, 0.4, 0.6, 0.8]
     # boundaries = [0.25, 0.5, 0.75]
-    boundaries = [0.33, 0.66]
+    boundaries = [0.5]
 
     #load trial ID data
     trial_ID = np.load("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_number.npy", allow_pickle=True)

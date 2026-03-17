@@ -323,7 +323,7 @@ def apply_task_masks(data: LoadedData, target_type: Optional[str], allowed_label
 # Saving
 # =========================
 def save_day_split_npz(out_results_dir: str, base: str, day_value: int, seed: int, train_trials: np.ndarray, test_trials: np.ndarray, args) -> str:
-    p = os.path.join(out_results_dir, f"{base}_split_trials_day{day_value}.npz")
+    p = os.path.join(out_results_dir, f"{base}_split_trials_day{day_value}_{args.prefix}.npz")
     np.savez(
         p,
         seed=int(seed),
@@ -341,7 +341,7 @@ def save_day_split_npz(out_results_dir: str, base: str, day_value: int, seed: in
 
 
 def save_day_weights_npz(out_weights_dir: str, base: str, day_value: int, seed: int, model: nn.Module, hidden: List[int], n_classes: int, scaler: Optional[StandardScaler], args) -> str:
-    p = os.path.join(out_weights_dir, f"{base}_weights_day{day_value}.npz")
+    p = os.path.join(out_weights_dir, f"{base}_weights_day{day_value}_{args.prefix}.npz")
     state = {k: v.detach().cpu().numpy() for k, v in model.state_dict().items()}
     np.savez(
         p,
@@ -368,8 +368,8 @@ def save_day_weights_npz(out_weights_dir: str, base: str, day_value: int, seed: 
     return p
 
 
-def save_day_outputs_npz(out_results_dir: str, base: str, day_value: int, seed: int, y_true: np.ndarray, y_pred: np.ndarray, group_test: np.ndarray, metrics: Dict[str, float]) -> str:
-    p = os.path.join(out_results_dir, f"{base}_outputs_day{day_value}.npz")
+def save_day_outputs_npz(out_results_dir: str, base: str, day_value: int, seed: int, y_true: np.ndarray, y_pred: np.ndarray, group_test: np.ndarray, metrics: Dict[str, float], args) -> str:
+    p = os.path.join(out_results_dir, f"{base}_outputs_day{day_value}_{args.prefix}.npz")
     np.savez(
         p,
         seed=int(seed),
@@ -641,6 +641,7 @@ def main() -> None:
             y_pred=y_pred,
             group_test=group_test,
             metrics={"acc": acc, "bacc": bacc, "f1": f1},
+            args=args,
         )
 
         logger.info(f"[Saved] split:   {split_path}")

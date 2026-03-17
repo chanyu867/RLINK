@@ -22,4 +22,5 @@ python -m src.RL_decoders.position_decoder \
     --finger_ID ${finger_ID} \
     --mode "position_W_upd" \
     --shift_mask_path ${shift_mask_path} \
-    --slicing_day 90
+    --slicing_day 90 \
+    --target_type "center-out" \

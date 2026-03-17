@@ -51,14 +51,56 @@ parser.add_argument('--sbp_path', type = str)
 parser.add_argument('--day_info_path', type = str)
 parser.add_argument('--onset_path', type = str)
 parser.add_argument('--label_path', type = str)
-parser.add_argument('--label_mask', type = list, default=None)
+parser.add_argument('--label_mask', type = str, default=None)
 parser.add_argument('--shift', type = int, required=True)
 parser.add_argument('--mode', type = str, required=True)
 parser.add_argument('--shift_mask_path', type = str, required=True)
 parser.add_argument('--slicing_day', type = int, required=True)
+parser.add_argument('--target_type', type = str, default=None, help="Options: center-out, random")
+parser.add_argument('--short_run', action='store_true', help="Whether to run a short version for testing")
+parser.add_argument('--best_params_path', type=str, default=None, help="Path to load best params for quick testing")
+parser.add_argument('--hpo_mode', type=str, default=None, help="HPO mode to determine which params to load (e.g., 'transition' or 'whole')")
+parser.add_argument('--n_lags', type=int, default=0, help="Number of past steps to stack")
+parser.add_argument('--lag_step', type=int, default=1, help="Distance between lags")
+parser.add_argument('--lag_group', type=str, default="trial", help="Prevent crossing trial boundaries")
 
 args = parser.parse_args()
 scaler = StandardScaler()
+
+
+def make_lagged_features(X, group, n_lags, lag_step=1):
+    if n_lags <= 0:
+        return X.astype(np.float32), np.arange(len(X))
+        
+    N, D = X.shape
+    X_out, valid_idx = [], []
+    
+    for g in np.unique(group):
+        idx = np.where(group == g)[0]
+        start = n_lags * lag_step
+        if idx.size <= start:
+            continue
+            
+        for j in range(start, idx.size):
+            t = idx[j]
+            feats = [X[t]]
+            for k in range(1, n_lags + 1):
+                feats.append(X[idx[j - k * lag_step]])
+            X_out.append(np.concatenate(feats, axis=0))
+            valid_idx.append(t)
+            
+    if len(X_out) == 0:
+        raise ValueError("CRITICAL: No samples left after lagging! All continuous blocks are too short for the sliding window.")
+        
+    X_lag = np.stack(X_out, axis=0).astype(np.float32)
+    return X_lag, np.array(valid_idx, dtype=int)
+
+def build_trial_ids(trial_bin_used):
+    trial_starts = (trial_bin_used == 0.0)
+    if len(trial_bin_used) > 0 and (trial_bin_used[0] != 0.0):
+        trial_starts[0] = True
+    return np.cumsum(trial_starts).astype(int) - 1
+
 
 def accuracy_over_time(y_true, y_pred, day_info, threshold=0.9):
     y_true = np.asarray(y_true)
@@ -121,7 +163,7 @@ def preprocess(model_type, sbp, cfg=None, output_dim=2, **kwargs):
 
     # 2) retrieve necessary parameters depending on given model type
     from src.RL_decoders.build_params import build_params
-    params = build_params(model_type, cfg, output_dim=output_dim)
+    params = build_params(model_type, cfg, input_dim=X.shape[1], output_dim=output_dim)
     setting = params["setting"]
     logger.info(f"{model_type} will run with {setting}")
 
@@ -133,6 +175,8 @@ def preprocess(model_type, sbp, cfg=None, output_dim=2, **kwargs):
 def run_decoder(X, y, model, day_info, **setting):
 
     #1. run model
+    # setting["n_lag"] = 10
+    # setting["lag_step"] = 1
     pred, when_explore, gamma = model(X, y, day_info, **setting)
 
     #2. convert data type
@@ -162,65 +206,137 @@ with open(args.toml_path, "rb") as f: # Open in binary mode ('rb')
 
 #2. retrieve temporal info
 day_info = npy_loader(path=args.day_info_path)
+master_indices = np.arange(len(day_info))
 # day_info = add_block_id(day_info) #-> when you apply mask for specific labels
 
 #3. load stimulus onset info for all samples
 stimulus_onset = npy_loader(path=args.onset_path)
 
-#4. load SBP data
+#4. load SBP, labels, and trial info
 sbp = npy_loader(path=args.sbp_path)
-
-#5. load label data (assume that user already defined the label data)
-from src.utils.data_loader import assemble_features, make_mask
 labels = npy_loader(path=args.label_path)
-labeled_sbp = assemble_features(neural_data=sbp, labels=labels) # add class as the last dimension
-del sbp # be merciful to RAM, save it from keeping useless 5 GB
+time_within_trial = npy_loader("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_bin.npy")
+
+#5. load target style info
+target = npy_loader("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/target_style.npy")
+target = np.asarray(target).astype(bool)
+target = ~target #flipping
+
+# task: check
+trial_ids = build_trial_ids(time_within_trial)
+
+# STEP 0: clip data for short_run testing
+if args.short_run:
+    clip_size = 10000000
+    sbp = sbp[:clip_size]
+    labels = labels[:clip_size]
+    day_info = day_info[:clip_size]
+    stimulus_onset = stimulus_onset[:clip_size]
+    target = target[:clip_size]
+    time_within_trial = time_within_trial[:clip_size]
+    trial_ids = trial_ids[:clip_size]
+    logger.info(f"Short run mode: clipped data to {clip_size} samples, remained labels: {np.unique(labels)}, days: {np.unique(day_info)}")
+
+# STEP A: introduce lags
+logger.info(f"Applying lags: n_lags={args.n_lags}, step={args.lag_step}")
+sbp, valid_idx = make_lagged_features(sbp, trial_ids, args.n_lags, args.lag_step)
+
+# Sync all other arrays to the samples that survived the lag window
+labels = labels[valid_idx]
+day_info = day_info[valid_idx]
+target = target[valid_idx]
+master_indices = master_indices[valid_idx]
 
 #6. masking for shifting
 if args.shift > 0:
-    time_within_trial = npy_loader("/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_bin.npy")
     shift_mask = npy_loader(args.shift_mask_path).astype(bool)
-    count_1 = time_within_trial[time_within_trial==0.0] #count how many trials are there
-    labeled_sbp = labeled_sbp[shift_mask]
+    shift_mask = shift_mask[valid_idx] # Sync mask!
+    sbp = sbp[shift_mask]
     labels = labels[shift_mask]
     day_info = day_info[shift_mask]
-    logger.info("masking data for shift: %s %s %d", time_within_trial.shape, labeled_sbp.shape, time_within_trial.shape[0]-(len(count_1)*args.shift)) #(7711816,) (7360816,)
-else:
-    shift_mask = None
+    target = target[shift_mask]
+    master_indices = master_indices[shift_mask]
 
 #7. masking for specific days
 if args.slicing_day is not None:
-    day_mask = day_info>args.slicing_day
+    day_mask = day_info > args.slicing_day
+    sbp = sbp[day_mask]
     labels = labels[day_mask]
     day_info = day_info[day_mask]
-    labeled_sbp = labeled_sbp[day_mask]
+    target = target[day_mask]
+    master_indices = master_indices[day_mask]
 
-#8. masking for labels
+#8. masking for target type
+if args.target_type == "center-out":
+    sbp = sbp[target]
+    labels = labels[target]
+    day_info = day_info[target]
+    master_indices = master_indices[target]
+elif args.target_type == "random":
+    sbp = sbp[~target]
+    labels = labels[~target]
+    day_info = day_info[~target]
+    master_indices = master_indices[~target]
+
+#9. masking for deadzone labels
 if args.label_mask is not None:
-    label_mask = make_mask(labels, args.label_mask) # keep [0., 0.15] and [0.85, 1.]
-    labeled_sbp = labeled_sbp[label_mask] # apply mask
-    stimulus_onset = stimulus_onset[label_mask]
+    allowed_labels = [int(x.strip()) for x in args.label_mask.split(",")]
+    label_mask = np.isin(labels.astype(int), allowed_labels)
+    
+    sbp = sbp[label_mask]
+    labels = labels[label_mask]
+    print("unique labels after mask:", np.unique(labels))
+    day_info = day_info[label_mask]
+    master_indices = master_indices[label_mask]
 
-#9. validate data consistency
-if not (len(labels) == len(day_info) == len(labeled_sbp)):
-    logger.error(f"Data length mismatch: labels={len(labels)}, day_info={len(day_info)}, labeled_sbp={len(labeled_sbp)}")
-    exit()
-else:
-    logger.info("final data length: %d %d %d", len(labels), len(day_info), len(labeled_sbp))
 
-#10. run models
-models = ["banditron", "banditronRP", "HRL", "AGREL"]
-# models = ["banditronRP"]
+    # Remap labels so RL matrices don't crash
+    unique_labels = np.sort(np.unique(labels))
+    remapper = {old_val: new_val for new_val, old_val in enumerate(unique_labels)}
+    labels = np.vectorize(remapper.get)(labels)
+    logger.info("Removed Deadzone and remapped labels. Final classes: %s", unique_labels)
+
+#10. assemble features ONLY at the very end
+from src.utils.data_loader import assemble_features
+labeled_sbp = assemble_features(neural_data=sbp, labels=labels)
+
+logger.info("Final data length: labels=%d, day_info=%d, labeled_sbp=%d", len(labels), len(day_info), len(labeled_sbp))
+
+#11. define all-in-one dataset
+from src.utils.data_loader import assemble_features
+labeled_sbp = assemble_features(neural_data=sbp, labels=labels)
+logger.info("Final data length: labels=%d, day_info=%d, labeled_sbp=%d", len(labels), len(day_info), len(labeled_sbp))
+
+#1. run models
+models = ["banditron", "banditronRP", "AGREL"]
+# models = ["banditron", "banditronRP", "HRL", "AGREL", "DQN", "QLGBM"]
 output_dim = np.unique(labels).size
 logger.info("debug: output dim: %d %d", output_dim, args.shift)
 
-for i in range(10): #testing different seeds
+if args.target_type is not None:
+    logger.info(f"data is masked according to the given target types, {args.target_type}")
+
+for i in range(3,5): #testing different seeds
     accs_list = []
     np.random.seed(i)
 
     logger.info(f"seed: {i}, shift: {args.shift}, labels: {args.label_path}")
 
     for model_type in models:
+
+        #[Optional] If best_params_path is provided, load the best parameters
+        if args.best_params_path is not None:
+            import json
+            params_path = os.path.join(args.best_params_path, f"best_params_{model_type}_{args.hpo_mode}.json")
+            with open(params_path, "r") as f:
+                best_params_data = json.load(f)
+                best_params = best_params_data.get("best_params", {})
+
+                for key, value in best_params.items():
+                    config[model_type][key] = value
+                    # config["HRL"][key] = value
+
+                logger.info(f"Loaded best parameters from {args.best_params_path}: {best_params}")
 
         #0. prepare for model
         X, y, model, setting = preprocess(model_type=model_type, sbp=labeled_sbp, cfg=config, output_dim=output_dim)
@@ -264,7 +380,8 @@ for i in range(10): #testing different seeds
             "accs": accs, #basically trust this
             "day_to_accs": day_to_accs,
             "bad_days": bad_days,
-            }
+            },
+            "master_indices": master_indices
         }
         
         np.save(expected_path, results, allow_pickle=True)

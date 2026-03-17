@@ -88,6 +88,7 @@ def stability_metrics_from_collected(collected_seeds, model, include_boundary=Fa
         return {"model": model, "n": 0}
 
     var_all = float(np.var(x, ddof=1)) if n > 1 else np.nan
+    std_all = float(np.std(x, ddof=1)) if n > 1 else np.nan
 
     neg = x[x < 0]
     n_neg = int(neg.size)
@@ -100,6 +101,7 @@ def stability_metrics_from_collected(collected_seeds, model, include_boundary=Fa
         "model": model,
         "n": n,
         "variance": var_all,
+        "standard_deviation": std_all,
         "downside_risk": downside_risk,
         "n_neg": n_neg,
         "var_down": var_down,
@@ -107,105 +109,5 @@ def stability_metrics_from_collected(collected_seeds, model, include_boundary=Fa
         "eps": float(eps),
         "include_boundary": bool(include_boundary),
     }
-
-
-def models_daily_mean_std(results_dir, finger, shift, models=None, gamma_mode=False, ylim=(0,1), ax=None):
-    if ax is None:
-        ax = plt.gca()
-    if models is None:
-        models = ["banditron", "banditronRP", "HRL", "AGREL"]
-
-    pat = re.compile(r"results_(?P<finger>[^_]+)_(?P<model>[^_]+)_shift(?P<shift>-?\d+)_seed(?P<seed>\d+)_gamma(?P<gamma>.+)\.npy$")
-    files = sorted(glob.glob(os.path.join(results_dir, "results_*.npy")))
-
-    # model -> list of (path, day_dict)
-    runs = {m: [] for m in models}
-
-    for f in files:
-        m = pat.match(os.path.basename(f))
-        if not m:
-            continue
-        gd = m.groupdict()
-        if gd["finger"] != finger or int(gd["shift"]) != int(shift):
-            continue
-        model = gd["model"]
-        if model not in runs:
-            continue
-
-        # gamma filtering
-        if model == "HRL":
-            if gamma_mode is True:   # gamma!=0 mode => exclude HRL
-                continue
-            # gamma==0 mode (None) => include HRL
-        else:
-            try:
-                gval = float(gd["gamma"])  # "0.00" or "0.0000" -> 0.0
-            except Exception:
-                continue
-            if gamma_mode is True and gval == 0.0:
-                continue
-            if gamma_mode is None and gval != 0.0:
-                continue
-
-        res = np.load(f, allow_pickle=True).item()
-        d = res["performance"]["day_to_accs"]
-
-        day_dict = {}
-        items = d.items() if isinstance(d, dict) else enumerate(d)
-        for k, v in items:
-            v = float(np.nanmean(np.asarray(v, dtype=float))) if isinstance(v, (list, tuple, np.ndarray)) else float(v)
-            day_dict[int(k)] = v
-
-        runs[model].append((f, day_dict))
-
-    # print used files (required)
-    mode_str = "gamma!=0" if gamma_mode is True else "gamma==0 (+HRL)"
-    print(f"\nUsed files | finger={finger}, shift={shift}, gamma_mode={mode_str}")
-    for model in models:
-        paths = [p for p, _ in runs[model]]
-        print(f"{model}: {len(paths)} files")
-        for p in paths:
-            print("  -", p)
-
-    # plot
-    ax.clear()
-    any_plotted = False
-
-    for model in models:
-        day_dicts = [dd for _, dd in runs[model]]
-        if not day_dicts:
-            continue
-
-        days = sorted({day for dd in day_dicts for day in dd.keys()})
-        means, stds = [], []
-
-        for day in days:
-            vals = [dd[day] for dd in day_dicts if day in dd and np.isfinite(dd[day])]
-            if len(vals) == 0:
-                means.append(np.nan); stds.append(np.nan)
-            elif len(vals) == 1:
-                means.append(float(vals[0])); stds.append(0.0)
-            else:
-                means.append(float(np.mean(vals)))
-                stds.append(float(np.std(vals, ddof=1)))
-
-        x = np.array(days)
-        y = np.array(means, float)
-        s = np.array(stds, float)
-        ok = np.isfinite(y)
-
-        ax.plot(x[ok], y[ok], label=f"{model} (n={len(day_dicts)} files)")
-        ax.fill_between(x[ok], y[ok]-s[ok], y[ok]+s[ok], alpha=0.2)
-        any_plotted = True
-
-    ax.set_xlabel("Day")
-    ax.set_ylabel("Accuracy")
-    ax.set_ylim(*ylim)
-    ax.grid(alpha=0.3)
-    ax.set_title(f"finger={finger}, shift={shift}, gamma_mode={mode_str}")
-    if any_plotted:
-        ax.legend(fontsize=8)
-    else:
-        ax.text(0.5, 0.5, "No matching files", ha="center", va="center", transform=ax.transAxes)
 
 
