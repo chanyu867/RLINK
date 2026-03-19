@@ -11,7 +11,7 @@ from src.utils.npy_loader import npy_loader
 # ------------------------- #
 
 parser = argparse.ArgumentParser(description="Post-analysis of model performance")
-parser.add_argument("--path_to_prediction", type=str, default="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/pred_results/run_eliminated1_with_hpo_results")
+parser.add_argument("--path_to_prediction", type=str, default="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/pred_results/run_eliminated1_with_hpo_results_Mar18th")
 parser.add_argument("--path_to_day_num", type=str, default="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/day_number.npy")
 parser.add_argument("--path_to_trial_bin", type=str, default="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_bin.npy")
 parser.add_argument("--post_analysis", action='store_true')
@@ -20,7 +20,7 @@ parser.add_argument("--transition_only", action='store_true', help="Plot only tr
 
 args = parser.parse_args()
 class_task_table = {2: "0.5"}
-models_to_analyze = ["banditron", "banditronRP", "HRL", "AGREL", "DQN"]
+models_to_analyze = ["DQN"]
 
 if args.post_analysis:
     for shift in [0]:
@@ -39,6 +39,7 @@ if args.post_analysis:
                 
                 if len(temp_paths) > 0:
                     sample_result = np.load(temp_paths[0], allow_pickle=True).item()
+                    print(f"key in sample_result: {list(sample_result.keys())}")
                     if "master_indices" in sample_result:
                         master_indices = sample_result["master_indices"]
                         print(f"[*] Found master_indices in {os.path.basename(temp_paths[0])}")
@@ -62,6 +63,7 @@ if args.post_analysis:
             for model in models_to_analyze:
                 pattern = f"{args.path_to_prediction}/{num_class}classes/results_idx_{model}_shift{shift}_seed*_gamma*.npy"
                 res_paths = filter_result_paths_by_gamma(pattern, args.gamma)
+                print(f"Currently loading: {model}")
 
                 if len(res_paths) == 0:
                     print(f"[WARN] No result files found for {model}")
@@ -97,7 +99,7 @@ if args.post_analysis:
             
             # 5. Execute Event-Aligned Recovery Plot across ALL models
             print(f"\n[*] Generating Event-Aligned Recovery Curve for all models...")
-            plot_event_aligned_recovery(model_paths_dict, time_within_trial, pre_window=5)
+            plot_event_aligned_recovery(model_paths_dict, time_within_trial, pre_window=3)
 
             # 6. Execute Continuous F1-Score Plot
             print(f"[*] Generating Continuous F1-Score Plot...")

@@ -28,17 +28,16 @@ for config_file in "config_exp.toml"; do
                     --toml_path ${toml_path} \
                     --shift ${shift} \
                     --finger_ID ${finger_ID} \
-                    --mode "run_eliminated1_with_hpo_results" \
+                    --mode "run_eliminated1_with_hpo_results_Mar18th" \
                     --shift_mask_path ${shift_mask_path} \
                     --slicing_day 1 \
+                    --upper_slicing_day 91 \
                     --best_params_path "/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/HPO" \
-                    --hpo_mode "all_class_trials" \
+                    --hpo_mode "whole" \
                     --target_type "random" \
                     --label_mask "0,2" \
                     --n_lags 16 \
                     --lag_step 4 \
-                    --short_run \
-                    --best_params_path "/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/HPO" \
                     2>&1 | tee -a "/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/logs/inference.log"
 
             # --short_run \

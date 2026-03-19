@@ -9,6 +9,8 @@ from sklearn.metrics import balanced_accuracy_score
 from src.utils.npy_loader import npy_loader
 from src.utils.data_loader import assemble_features
 from src.RL_decoders.algorithms import banditron, banditronRP, HRL, AGREL, DQN, QLGBM
+import gc
+import tensorflow as tf
 # Configure Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -147,6 +149,10 @@ def objective_factory(args, X, y, day_info, trial_ids, config, model_func):
                 
             score = balanced_accuracy_score(y_true[valid_trial_mask], y_pred[valid_trial_mask])
 
+        if args.model_type == "DQN":
+            tf.keras.backend.clear_session()
+            gc.collect()
+
         return score
     return objective
 
@@ -191,7 +197,19 @@ def main():
     target = npy_loader(args.target_style_path)
     target = ~np.asarray(target).astype(bool) # flipping
 
+    # # ========================================================
+    # day_changes = np.where(day_info[1:] != day_info[:-1])[0] + 1
+    # day_starts = np.insert(day_changes, 0, 0)
+    # unique_days = np.unique(day_info)
+    
+    # logger.info("--- RAW DATA: DAY START INDICES ---")
+    # for day, start_idx in zip(unique_days, day_starts):
+    #     logger.info(f"Day {int(day)} starts at sample index: {start_idx}")
+    # logger.info("-" * 35)
+    # # ========================================================
+
     if args.max_samples is not None:
+        # print(f"full length: sbp={len(sbp)}, labels={len(labels)}, day_info={len(day_info)}, time_within_trial={len(time_within_trial)}, target={len(target)}")
         sbp = sbp[:args.max_samples]
         labels = labels[:args.max_samples]
         day_info = day_info[:args.max_samples]
@@ -220,8 +238,13 @@ def main():
         shift_mask = npy_loader(args.shift_mask_path).astype(bool)[valid_idx]
         sbp, labels, day_info, target, trial_ids = sbp[shift_mask], labels[shift_mask], day_info[shift_mask], target[shift_mask], trial_ids[shift_mask]
 
+    #slice the data for HPO
     if args.slicing_day is not None:
-        day_mask = day_info > args.slicing_day
+        from src.baselines.mlp_train import compute_slicing_day_value
+        slicing_day_value = compute_slicing_day_value(day_info, args.slicing_day)
+        logger.info(f"Slicing data up to day {args.slicing_day} (day value <= {slicing_day_value:.2f}) for HPO")
+        day_mask = day_info <= args.slicing_day
+        print(f"{np.sum(day_mask)} of data is available for HPO")
         sbp, labels, day_info, target, trial_ids = sbp[day_mask], labels[day_mask], day_info[day_mask], target[day_mask], trial_ids[day_mask]
 
     if args.target_type == "center-out":
@@ -242,22 +265,11 @@ def main():
         
         # SAFETY CHECK: Ensure we didn't filter out ALL samples
         if len(labels) == 0:
-            raise ValueError(f"CRITICAL: No samples remaining after applying label_mask {allowed_labels}. "
-                             "Try increasing --max_samples or checking your data slice.")
+            raise ValueError(f"CRITICAL: No samples remaining after applying label_mask {allowed_labels}. ")
 
         unique_labels = np.sort(np.unique(labels))
         remapper = {old_val: new_val for new_val, old_val in enumerate(unique_labels)}
         labels = np.vectorize(remapper.get)(labels)
-
-    # ========================================================
-    # STEP C: TRUNCATE FOR HPO SPEED & RUN
-    # ========================================================
-    if args.max_samples > 0 and len(sbp) > args.max_samples:
-        logger.info(f"Truncating data from {len(sbp)} down to {args.max_samples} for faster HPO...")
-        sbp = sbp[:args.max_samples]
-        labels = labels[:args.max_samples]
-        day_info = day_info[:args.max_samples]
-        trial_ids = trial_ids[:args.max_samples]
 
     logger.info("=" * 40)
     logger.info("FINAL HPO DATA SUMMARY:")
@@ -266,6 +278,24 @@ def main():
     logger.info(f"Number of unique trials:  {np.unique(trial_ids).size}")
     logger.info(f"Classes being optimized:  {np.unique(labels)}")
     logger.info("=" * 40)
+
+    logger.info("Breakdown by Class:")
+    unique_classes = np.unique(labels)
+    for c in unique_classes:
+        c_mask = (labels == c)
+        n_samples = np.sum(c_mask)  # Total number of datapoints for this class
+        n_trials = np.unique(trial_ids[c_mask]).size # Total unique trials containing this class
+        logger.info(f"  -> Class {int(c)}: {n_samples} samples (across {n_trials} trials)")
+    logger.info("=" * 40)
+    
+    day_changes = np.where(day_info[1:] != day_info[:-1])[0] + 1
+    day_starts = np.insert(day_changes, 0, 0)
+    unique_days = np.unique(day_info)
+
+    logger.info(f"--- HPO DATA: DAY START INDICES ---") # Print first 100 for sanity check
+    for day, start_idx in zip(unique_days, day_starts):
+        logger.info(f"Day {int(day):02d} starts at sample index: {start_idx}")
+    logger.info("-" * 35)
 
     labeled_sbp = assemble_features(neural_data=sbp, labels=labels)
     X = labeled_sbp[:, :-1]

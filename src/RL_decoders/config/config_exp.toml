@@ -30,10 +30,10 @@ alpha = 0.1
 beta = 0.1
 num_nodes = [96, 3, 2]
 
-[dqn] #DQN(X,Y,error,sparsity_rate,epsilon,gamma)
+[DQN] #DQN(X,Y,error,sparsity_rate,epsilon,gamma)
 epsilon = 0.01
 gamma = 0.1
 
-[qlgbm] #QLGBM(X,Y,error,sparsity_rate,epsilon,gamma)
+[QLBGM] #QLGBM(X,Y,error,sparsity_rate,epsilon,gamma)
 epsilon = 0.01
 gamma = 0.1

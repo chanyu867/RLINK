@@ -56,6 +56,7 @@ parser.add_argument('--shift', type = int, required=True)
 parser.add_argument('--mode', type = str, required=True)
 parser.add_argument('--shift_mask_path', type = str, required=True)
 parser.add_argument('--slicing_day', type = int, required=True)
+parser.add_argument('--upper_slicing_day', type = int)
 parser.add_argument('--target_type', type = str, default=None, help="Options: center-out, random")
 parser.add_argument('--short_run', action='store_true', help="Whether to run a short version for testing")
 parser.add_argument('--best_params_path', type=str, default=None, help="Path to load best params for quick testing")
@@ -134,7 +135,8 @@ def load_model(case):
         'banditronRP': banditronRP,
         'HRL': HRL,
         'AGREL': AGREL,
-        'DQN': DQN,
+        # 'DQN': DQN,
+        'DQN': DQN_ewc,
         'QLGBM': QLGBM
     }
     # Get the function associated with the case and call it
@@ -198,6 +200,65 @@ def build_result_path(save_dir, finger_ID, model_type, shift, seed, gamma):
         f"results_{finger_ID}_{model_type}_shift{shift}_seed{seed}_gamma{gamma}.npy"
     )
 
+#for batch-based DQN
+def run_decoder_batch_dqn(X, y, model, day_info, setting, save_dir, seed, update_W, trial_ids, chunk_size=10000):
+    """
+    Safely processes massive datasets for DQN by splitting them into chunks, 
+    saving/loading Keras weights between chunks, and clearing memory to prevent OOM.
+    """
+    logger.info("DQN detected: Running in batch mode to prevent memory exhaustion.")
+    num_chunks = int(np.ceil(len(X) / chunk_size))
+    
+    all_y_true, all_y_pred, all_when_explore = [], [], []
+    
+    # Temporary file to hand weights between batches
+    weights_path = os.path.join(save_dir, f"temp_dqn_weights_seed{seed}.h5")
+    if os.path.exists(weights_path):
+        os.remove(weights_path) # Clear old runs
+        
+    for c_idx in range(num_chunks):
+        start = c_idx * chunk_size
+        end = min((c_idx + 1) * chunk_size, len(X))
+        
+        # Slice data for this chunk
+        X_chunk = X[start:end]
+        y_chunk = y[start:end]
+        day_chunk = day_info[start:end] if day_info is not None else None
+        
+        logger.info(f"\n{'='*40}\n--- DQN Batch {c_idx+1}/{num_chunks} (Samples {start} to {end}) ---\n{'='*40}")
+        
+        # Configure the setting to load/save weights correctly
+        chunk_setting = setting.copy()
+        if c_idx > 0:
+            chunk_setting["weights_load_path"] = weights_path
+        chunk_setting["weights_save_path"] = weights_path
+
+        chunk_setting["trial_ids"] = trial_ids[start:end] if trial_ids is not None else None
+        
+        # Run the chunk
+        if update_W:
+            acc_c, _, _, when_explore_c = run_decoder(X_chunk, y_chunk, model, day_chunk, **chunk_setting)
+        else:
+            acc_c, _, _, when_explore_c = run_decoder(X_chunk, y_chunk, model, None, **chunk_setting)
+        
+        # Append results
+        all_y_true.extend(acc_c[0])
+        all_y_pred.extend(acc_c[1])
+        all_when_explore.extend(when_explore_c)
+        
+        # Clears Keras memory graph to prevent soft-kill
+        tf.keras.backend.clear_session()
+        
+    # Reconstruct the outputs to look exactly like a single huge run
+    acc = [np.array(all_y_true), np.array(all_y_pred)]
+    when_explore = np.array(all_when_explore)
+    
+    # Clean up the temporary weights file
+    if os.path.exists(weights_path):
+        os.remove(weights_path)
+        
+    return acc, X, y, when_explore
+
 #    ------- main -------    #
 
 #1. load setting
@@ -226,16 +287,29 @@ target = ~target #flipping
 trial_ids = build_trial_ids(time_within_trial)
 
 # STEP 0: clip data for short_run testing
-if args.short_run:
-    clip_size = 10000000
-    sbp = sbp[:clip_size]
-    labels = labels[:clip_size]
-    day_info = day_info[:clip_size]
-    stimulus_onset = stimulus_onset[:clip_size]
-    target = target[:clip_size]
-    time_within_trial = time_within_trial[:clip_size]
-    trial_ids = trial_ids[:clip_size]
-    logger.info(f"Short run mode: clipped data to {clip_size} samples, remained labels: {np.unique(labels)}, days: {np.unique(day_info)}")
+# if args.short_run:
+#     clip_size = 380000
+#     sbp = sbp[:clip_size]
+#     labels = labels[:clip_size]
+#     day_info = day_info[:clip_size]
+#     stimulus_onset = stimulus_onset[:clip_size]
+#     target = target[:clip_size]
+#     time_within_trial = time_within_trial[:clip_size]
+#     trial_ids = trial_ids[:clip_size]
+#     logger.info(f"Short run mode: clipped data to {clip_size} samples, remained labels: {np.unique(labels)}, days: {np.unique(day_info)}")
+
+#5. masking for specific days
+if args.slicing_day is not None:
+    if args.upper_slicing_day is not None:
+        day_mask = (day_info > args.slicing_day) & (day_info <= args.upper_slicing_day)
+    else:
+        day_mask = day_info > args.slicing_day
+    sbp = sbp[day_mask]
+    labels = labels[day_mask]
+    day_info = day_info[day_mask]
+    target = target[day_mask]
+    master_indices = master_indices[day_mask]
+    trial_ids = trial_ids[day_mask]
 
 # STEP A: introduce lags
 logger.info(f"Applying lags: n_lags={args.n_lags}, step={args.lag_step}")
@@ -246,25 +320,23 @@ labels = labels[valid_idx]
 day_info = day_info[valid_idx]
 target = target[valid_idx]
 master_indices = master_indices[valid_idx]
+trial_ids = trial_ids[valid_idx]
 
 #6. masking for shifting
 if args.shift > 0:
     shift_mask = npy_loader(args.shift_mask_path).astype(bool)
+    if args.slicing_day is not None:
+        shift_mask = shift_mask[day_mask]
+    else:
+        shift_mask = shift_mask
+
     shift_mask = shift_mask[valid_idx] # Sync mask!
     sbp = sbp[shift_mask]
     labels = labels[shift_mask]
     day_info = day_info[shift_mask]
     target = target[shift_mask]
+    trial_ids = trial_ids[shift_mask]
     master_indices = master_indices[shift_mask]
-
-#7. masking for specific days
-if args.slicing_day is not None:
-    day_mask = day_info > args.slicing_day
-    sbp = sbp[day_mask]
-    labels = labels[day_mask]
-    day_info = day_info[day_mask]
-    target = target[day_mask]
-    master_indices = master_indices[day_mask]
 
 #8. masking for target type
 if args.target_type == "center-out":
@@ -272,11 +344,13 @@ if args.target_type == "center-out":
     labels = labels[target]
     day_info = day_info[target]
     master_indices = master_indices[target]
+    trial_ids = trial_ids[target]
 elif args.target_type == "random":
     sbp = sbp[~target]
     labels = labels[~target]
     day_info = day_info[~target]
     master_indices = master_indices[~target]
+    trial_ids = trial_ids[~target]
 
 #9. masking for deadzone labels
 if args.label_mask is not None:
@@ -288,27 +362,20 @@ if args.label_mask is not None:
     print("unique labels after mask:", np.unique(labels))
     day_info = day_info[label_mask]
     master_indices = master_indices[label_mask]
-
+    trial_ids = trial_ids[label_mask]
 
     # Remap labels so RL matrices don't crash
     unique_labels = np.sort(np.unique(labels))
     remapper = {old_val: new_val for new_val, old_val in enumerate(unique_labels)}
     labels = np.vectorize(remapper.get)(labels)
-    logger.info("Removed Deadzone and remapped labels. Final classes: %s", unique_labels)
 
 #10. assemble features ONLY at the very end
-from src.utils.data_loader import assemble_features
-labeled_sbp = assemble_features(neural_data=sbp, labels=labels)
-
-logger.info("Final data length: labels=%d, day_info=%d, labeled_sbp=%d", len(labels), len(day_info), len(labeled_sbp))
-
-#11. define all-in-one dataset
 from src.utils.data_loader import assemble_features
 labeled_sbp = assemble_features(neural_data=sbp, labels=labels)
 logger.info("Final data length: labels=%d, day_info=%d, labeled_sbp=%d", len(labels), len(day_info), len(labeled_sbp))
 
 #1. run models
-models = ["banditron", "banditronRP", "AGREL"]
+models = ["DQN"]
 # models = ["banditron", "banditronRP", "HRL", "AGREL", "DQN", "QLGBM"]
 output_dim = np.unique(labels).size
 logger.info("debug: output dim: %d %d", output_dim, args.shift)
@@ -316,7 +383,7 @@ logger.info("debug: output dim: %d %d", output_dim, args.shift)
 if args.target_type is not None:
     logger.info(f"data is masked according to the given target types, {args.target_type}")
 
-for i in range(3,5): #testing different seeds
+for i in range(0,3): #testing different seeds
     accs_list = []
     np.random.seed(i)
 
@@ -328,6 +395,7 @@ for i in range(3,5): #testing different seeds
         if args.best_params_path is not None:
             import json
             params_path = os.path.join(args.best_params_path, f"best_params_{model_type}_{args.hpo_mode}.json")
+            print(f"Loading best parameters for {model_type} from: {params_path}")
             with open(params_path, "r") as f:
                 best_params_data = json.load(f)
                 best_params = best_params_data.get("best_params", {})
@@ -353,10 +421,17 @@ for i in range(3,5): #testing different seeds
             logger.info("RUNNING for: %s", expected_path)
 
         #2. run model if the result is not existing
-        if args.update_W:
-            acc, sbp, label, when_explore = run_decoder(X, y, model, day_info, **setting)
+        if model_type == "DQN":
+            # Use the new batching function for memory-heavy DQN
+            acc, sbp, label, when_explore = run_decoder_batch_dqn(
+                X, y, model, day_info, setting, save_dir, seed=i, update_W=args.update_W, trial_ids=trial_ids
+            )
         else:
-            acc, sbp, label, when_explore = run_decoder(X, y, model, None, **setting)
+            # Standard run for lightweight models (Banditron, AGREL, etc.)
+            if args.update_W:
+                acc, sbp, label, when_explore = run_decoder(X, y, model, day_info, **setting)
+            else:
+                acc, sbp, label, when_explore = run_decoder(X, y, model, None, **setting)
 
         #3. calculate accuracy for normal setting(y_tilde)
         xs, accs, day_to_accs, bad_days = accuracy_over_time(y_true=acc[0], y_pred=acc[1], day_info=day_info)

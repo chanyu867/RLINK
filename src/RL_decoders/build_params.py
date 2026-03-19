@@ -87,8 +87,8 @@ def build_params(model_type, cfg: dict, input_dim, output_dim) -> dict:
         logger.info(f"AGREL - output_dim is defined as: {setting['num_nodes']}")
 
     elif model_type == "DQN":
-        setting["epsilon"] = cfg.get("dqn").get("epsilon")
-        setting["gamma"] = cfg.get("dqn").get("gamma")
+        setting["epsilon"] = cfg.get("DQN").get("epsilon")
+        setting["gamma"] = cfg.get("DQN").get("gamma")
 
         if setting["epsilon"] is None or setting["gamma"] is None:
             raise ValueError("config missing: [dqn].epsilon and/or [dqn].gamma")
@@ -97,8 +97,8 @@ def build_params(model_type, cfg: dict, input_dim, output_dim) -> dict:
         setting["gamma"] = float(setting["gamma"])
 
     elif model_type == "QLGBM":
-            setting["epsilon"] = cfg.get("qlgbm").get("epsilon")
-            setting["gamma"] = cfg.get("qlgbm").get("gamma")
+            setting["epsilon"] = cfg.get("QLGBM").get("epsilon")
+            setting["gamma"] = cfg.get("QLGBM").get("gamma")
 
             if setting["epsilon"] is None or setting["gamma"] is None:
                 raise ValueError("config missing: [qlgbm].epsilon and/or [qlgbm].gamma")

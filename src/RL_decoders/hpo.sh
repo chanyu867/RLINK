@@ -11,8 +11,7 @@ LOG_DIR="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/logs"
 
 # --- HPO Parameters ---
 N_TRIALS=100
-MAX_SAMPLES=1000000
-METRIC="all_class_trials" # Options: 'whole', 'transition', 'all_class_trials'
+METRIC="whole" # Options: 'whole', 'transition', 'all_class_trials'
 
 # --- Data Pipeline / Masking Parameters ---
 TARGET_TYPE="random"
@@ -52,8 +51,9 @@ for MODEL in "${MODELS[@]}"; do
         --label_mask "$LABEL_MASK" \
         --n_lags $N_LAGS \
         --lag_step $LAG_STEP \
+        --max_samples 500000 \
+        --slicing_day 12 \
         --n_trials $N_TRIALS \
-        --max_samples $MAX_SAMPLES \
         2>&1 | tee -a "$LOG_DIR/hpo_${MODEL}.log"
 
     echo ">>> Finished $MODEL. Results saved to best_params_${MODEL}_${METRIC}.json"

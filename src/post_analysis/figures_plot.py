@@ -166,17 +166,12 @@ def plot_daywise_trial_blocks(res_paths, day_number, time_within_trial, block=10
 # ========================================================
 
 def plot_event_aligned_recovery(model_paths_dict, time_within_trial, pre_window=15, max_post_window=100):
-    """
-    ポジション変化直後の適応をプロットします。
-    「一番短いトライアル」を見つけ出し、すべてのデータをその長さに切り揃えることで、
-    データを捨てることなく、生存バイアス（N数の変動）を完全に防ぎます。
-    """
+    
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
     
     mid_events = {m: [] for m in model_paths_dict.keys()}
     bound_events = {m: [] for m in model_paths_dict.keys()}
     
-    # すべてのイベントの中で「最も短いトライアルの残り長さ」を記録する変数
     global_min_post_mid = max_post_window
     global_min_post_bound = max_post_window
     
@@ -189,19 +184,17 @@ def plot_event_aligned_recovery(model_paths_dict, time_within_trial, pre_window=
             transitions = np.where(y_true[1:] != y_true[:-1])[0] + 1
             
             for t in transitions:
-                # ① 変化後のデータが「次のトライアル開始」までに何サンプルあるか(post_len)を計算
                 max_fwd = min(max_post_window, len(y_true) - t)
                 post_len = max_fwd
                 for i in range(1, max_fwd):
                     if time_within_trial[t + i] == 0.0:
-                        post_len = i  # 次のトライアルの直前までの長さを取得
+                        post_len = i
                         break
 
                 min_required_post = 5
                 if post_len < min_required_post:
                     continue
                 
-                # ② 変化前のデータが「現在のトライアル開始」から何サンプルあるか(pre_len)を計算
                 max_bwd = min(pre_window, t)
                 pre_len = max_bwd
                 if time_within_trial[t] != 0.0:
@@ -210,11 +203,9 @@ def plot_event_aligned_recovery(model_paths_dict, time_within_trial, pre_window=
                             pre_len = i - 1
                             break
                 
-                # 変化前のベースライン(Hold)が確保できない極端に早すぎるイベントのみ除外
                 if pre_len < pre_window:
                     continue
                     
-                # 必要な長さだけ正確にスライスしてAccuracyを計算
                 window_true = y_true[t - pre_window : t + post_len]
                 window_pred = y_pred[t - pre_window : t + post_len]
                 acc = (window_true == window_pred).astype(float)
@@ -223,20 +214,17 @@ def plot_event_aligned_recovery(model_paths_dict, time_within_trial, pre_window=
                     bound_events[model_name].append(acc)
                     global_min_post_bound = min(global_min_post_bound, post_len)
                 else:
-                    # 壊れた時計（まぐれ当たり）を防ぐため、移動前の正解率が50%以上のものだけを採用
                     pre_transition_acc = np.mean(acc[:pre_window])
                     if pre_transition_acc > 0.5:
                         mid_events[model_name].append(acc)
                         global_min_post_mid = min(global_min_post_mid, post_len)
 
-    # --- すべての配列を「最も短い長さに切り揃えて」平均化・プロット ---
     for ax, events_dict, min_post, title in zip(
         [ax1, ax2], 
         [mid_events, bound_events], 
         [global_min_post_mid, global_min_post_bound],
         ["Mid-Trial Adaptation", "Cross-Trial Reset Tolerance"]
     ):
-        # 描画するx軸も「最小の長さ」に合わせる
         x_axis = np.arange(-pre_window, min_post)
         
         for model_name, ev_list in events_dict.items():

@@ -293,10 +293,16 @@ denotes the exploration constant and discount factor. X denotes the spike count 
 (observation -- input dataset) and y denotes the true labels associated with each observation (X). 
 '''
 # def DQN(X,Y,epsilon,gamma,error,sparsity_rate):
-def DQN(X,Y,day_info, error,sparsity_rate,epsilon,gamma):
+# def DQN(X,Y,day_info, error,sparsity_rate,epsilon,gamma):
+def DQN(X, Y, day_info, error, sparsity_rate, epsilon, gamma, weights_load_path=None, weights_save_path=None):
 
   inp_shp = X.shape[1] # Number of electrodes --> corresponding to the no. of neurons in the first layer.
   model = get_DQN_model(inp_shp)
+
+  if weights_load_path is not None and os.path.exists(weights_load_path):
+      model.load_weights(weights_load_path)
+      logger.info(f"[DQN] Successfully loaded saved weights from {weights_load_path}")
+    
   T = X.shape[0]
   scaler = StandardScaler()
   X_norm = scaler.fit_transform(X)
@@ -308,7 +314,7 @@ def DQN(X,Y,day_info, error,sparsity_rate,epsilon,gamma):
   #each shape: (10000, 96), (10000,)
 
   for t in range(T):
-    if t % 10 == 0 or t == T - 1:
+    if t % 1000 == 0 or t == T - 1:
       logger.info(f"\r[DQN] Processing step {t+1}/{T}")
 
     x = X_norm[t,:].reshape(1,X.shape[1]).astype(np.float32)
@@ -340,8 +346,271 @@ def DQN(X,Y,day_info, error,sparsity_rate,epsilon,gamma):
     pred.append(ytilde)
     when_explore.append(explore)
 
+  if weights_save_path is not None:
+    model.save_weights(weights_save_path)
+    logger.info(f"[DQN] Saved weights to {weights_save_path}")
+
   return np.array(pred), np.array(when_explore), gamma
 
+# def DQN_ewc(X, Y, day_info, error, sparsity_rate, epsilon, gamma, ewc_lambda=10.0, weights_load_path=None, weights_save_path=None):
+#     """
+#     DQN implemented with Elastic Weight Consolidation (EWC) using tf.GradientTape.
+#     ewc_lambda controls how strongly the model remembers previous days (tasks).
+#     """
+#     inp_shp = X.shape[1] 
+#     model = get_DQN_model(inp_shp)
+    
+#     # We define the optimizer and loss function manually for GradientTape
+#     optimizer = tf.keras.optimizers.Adam()
+#     loss_fn = tf.keras.losses.MeanSquaredError()
+
+#     if weights_load_path is not None and os.path.exists(weights_load_path):
+#         model.load_weights(weights_load_path)
+#         logger.info(f"[DQN] Successfully loaded saved weights from {weights_load_path}")
+        
+#     T = X.shape[0]
+#     scaler = StandardScaler()
+#     X_norm = scaler.fit_transform(X)
+    
+#     pred = []
+#     when_explore = []
+    
+#     # --- EWC Variables ---
+#     star_weights = []     # Saves the critical weights from the previous day (theta_A)
+#     fisher_matrix = []    # Saves the importance of each weight (F)
+#     recent_x_buffer = []  # Holds recent data to calculate the Fisher matrix at boundaries
+#     buffer_size = 200     # How many samples to use for Fisher estimation
+
+#     logger.info(f"DQN Data shape: {X_norm.shape}, Labels shape: {Y.shape}")
+
+#     for t in range(T):
+#         if t % 1000 == 0 or t == T - 1:
+#             logger.info(f"\r[DQN] Processing step {t+1}/{T}")
+
+#         x = X_norm[t,:].reshape(1, X.shape[1]).astype(np.float32)
+#         y_true = Y[t]
+        
+#         # Keep a rolling buffer of recent inputs to calculate the Fisher matrix later
+#         recent_x_buffer.append(x)
+#         if len(recent_x_buffer) > buffer_size:
+#             recent_x_buffer.pop(0)
+
+#         # =================================================================
+#         # 1. TASK BOUNDARY DETECTION & FISHER MATRIX CALCULATION
+#         # =================================================================
+#         if day_info is not None and t > 0 and day_info[t] != day_info[t-1]:
+#             logger.info(f"\n[DQN] Day change detected at t={t}: Day {day_info[t-1]} -> Day {day_info[t]}. Calculating EWC Fisher Matrix...")
+            
+#             # Save the current "perfect" weights for the day that just finished
+#             star_weights = [tf.identity(w) for w in model.trainable_variables]
+            
+#             # Approximate the Fisher Information Matrix using the recent buffer
+#             fisher_matrix = [tf.zeros_like(w) for w in model.trainable_variables]
+            
+#             for bx in recent_x_buffer:
+#                 with tf.GradientTape() as tape:
+#                     # Log-likelihood approximation for RL (gradient of max Q-value)
+#                     q_vals = model(bx, training=False)
+#                     max_q = tf.reduce_max(q_vals)
+                
+#                 # Get gradients of the max Q-value with respect to weights
+#                 grads = tape.gradient(max_q, model.trainable_variables)
+                
+#                 # Square the gradients and accumulate them
+#                 for i, g in enumerate(grads):
+#                     if g is not None:
+#                         fisher_matrix[i] += tf.square(g) / float(len(recent_x_buffer))
+            
+#             logger.info("[DQN] Fisher Matrix calculated. Spring penalties active for the new day.")
+#             recent_x_buffer.clear() # Reset buffer for the new day
+
+#         # =================================================================
+#         # 2. STANDARD DQN LOGIC (Exploration, Q-values, Target Vector)
+#         # =================================================================
+#         Q = model(x, training=False).numpy()
+#         yhat = np.argmax(Q)
+        
+#         explore = np.random.uniform() < epsilon
+#         if explore:
+#             ytilde = np.random.randint(low=0, high=4)
+#         else:
+#             ytilde = yhat
+            
+#         sparsify = np.random.choice([True, False], p=[sparsity_rate, 1 - sparsity_rate])
+        
+#         if not sparsify:
+#             if ytilde == y_true:
+#                 r = np.random.choice([-1, 1], p=[error, 1 - error])
+#             else:
+#                 r = np.random.choice([1, -1], p=[error, 1 - error])
+
+#             Target = r + gamma * np.amax(Q)
+#             Target_vec = np.copy(Q)
+#             Target_vec[0, ytilde] = Target
+
+#             # =================================================================
+#             # 3. EWC CUSTOM TRAINING STEP (Replaces model.fit)
+#             # =================================================================
+#             with tf.GradientTape() as tape:
+#                 # Get predictions
+#                 Q_pred = model(x, training=True)
+                
+#                 # Base Loss: Mean Squared Error
+#                 loss = loss_fn(Target_vec, Q_pred)
+                
+#                 # EWC Penalty: Add the "spring" mechanism if we have past tasks
+#                 if len(star_weights) > 0:
+#                     ewc_penalty = 0.0
+#                     for v, star_v, fisher in zip(model.trainable_variables, star_weights, fisher_matrix):
+#                         # Formula: lambda/2 * Fisher * (current_weight - star_weight)^2
+#                         ewc_penalty += tf.reduce_sum(fisher * tf.square(v - star_v))
+                    
+#                     # Combine Base Loss and Penalty
+#                     loss += (ewc_lambda / 2.0) * ewc_penalty
+            
+#             # Calculate gradients based on the COMBINED loss and apply them
+#             grads = tape.gradient(loss, model.trainable_variables)
+#             optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+#         pred.append(ytilde)
+#         when_explore.append(explore)
+
+#     if weights_save_path is not None and t == T - 1:
+#         model.save_weights(weights_save_path)
+#         logger.info(f"[DQN] Saved final weights to {weights_save_path}")
+
+#     return np.array(pred), np.array(when_explore), gamma
+
+
+def DQN_ewc(X, Y, day_info, error, sparsity_rate, epsilon, gamma, ewc_lambda=1.0, fisher_decay=0.95, trial_ids=None, weights_load_path=None, weights_save_path=None):
+    """
+    Online EWC for DQN. Calculates the Fisher Information Matrix at the end of 
+    every trial and applies an exponential decay to forget distant past data.
+    """
+    inp_shp = X.shape[1] 
+    model = get_DQN_model(inp_shp)
+    
+    # Using legacy Adam for M1/M2 Mac speedups
+    optimizer = tf.keras.optimizers.legacy.Adam()
+    loss_fn = tf.keras.losses.MeanSquaredError()
+
+    if weights_load_path is not None and os.path.exists(weights_load_path):
+        model.load_weights(weights_load_path)
+        logger.info(f"[DQN] Successfully loaded saved weights from {weights_load_path}")
+        
+    T = X.shape[0]
+    scaler = StandardScaler()
+    X_norm = scaler.fit_transform(X)
+    
+    pred = []
+    when_explore = []
+    
+    # --- Online EWC Variables ---
+    star_weights = []     
+    # Initialize a running global Fisher matrix with zeros
+    running_fisher = [tf.zeros_like(w) for w in model.trainable_variables]
+    current_trial_buffer = []  
+
+    logger.info(f"DQN Data shape: {X_norm.shape}, Labels shape: {Y.shape}")
+    if trial_ids is None:
+        logger.warning("[DQN_ewc] trial_ids not provided! Will default to day-boundary updates.")
+
+    for t in range(T):
+        if t % 1000 == 0 or t == T - 1:
+            logger.info(f"\r[DQN] Processing step {t+1}/{T}")
+
+        x = X_norm[t,:].reshape(1, X.shape[1]).astype(np.float32)
+        y_true = Y[t]
+        
+        # Collect data for the current trial
+        current_trial_buffer.append(x)
+
+        # =================================================================
+        # 1. STANDARD DQN LOGIC (Exploration, Q-values, Target Vector)
+        # =================================================================
+        Q = model(x, training=False).numpy()
+        yhat = np.argmax(Q)
+        
+        explore = np.random.uniform() < epsilon
+        if explore:
+            ytilde = np.random.randint(low=0, high=4)
+        else:
+            ytilde = yhat
+            
+        sparsify = np.random.choice([True, False], p=[sparsity_rate, 1 - sparsity_rate])
+        
+        if not sparsify:
+            if ytilde == y_true:
+                r = np.random.choice([-1, 1], p=[error, 1 - error])
+            else:
+                r = np.random.choice([1, -1], p=[error, 1 - error])
+
+            Target = r + gamma * np.amax(Q)
+            Target_vec = np.copy(Q)
+            Target_vec[0, ytilde] = Target
+
+            # =================================================================
+            # 2. EWC CUSTOM TRAINING STEP
+            # =================================================================
+            with tf.GradientTape() as tape:
+                Q_pred = model(x, training=True)
+                loss = loss_fn(Target_vec, Q_pred)
+                
+                # Apply the decaying spring penalty if we have past tasks
+                if len(star_weights) > 0:
+                    ewc_penalty = 0.0
+                    for v, star_v, fisher in zip(model.trainable_variables, star_weights, running_fisher):
+                        ewc_penalty += tf.reduce_sum(fisher * tf.square(v - star_v))
+                    loss += (ewc_lambda / 2.0) * ewc_penalty
+            
+            grads = tape.gradient(loss, model.trainable_variables)
+            optimizer.apply_gradients(zip(grads, model.trainable_variables))
+
+        pred.append(ytilde)
+        when_explore.append(explore)
+
+        # =================================================================
+        # 3. TRIAL BOUNDARY DETECTION & ONLINE EWC UPDATE
+        # =================================================================
+        is_trial_end = False
+        if trial_ids is not None:
+            # Check if the next sample belongs to a different trial
+            if t < T - 1 and trial_ids[t] != trial_ids[t+1]:
+                is_trial_end = True
+            elif t == T - 1:
+                is_trial_end = True
+        else:
+            # Fallback to day changes if trial_ids are missing
+            if day_info is not None and t < T - 1 and day_info[t] != day_info[t+1]:
+                is_trial_end = True
+
+        if is_trial_end and len(current_trial_buffer) > 0:
+            # Calculate Trial-specific Fisher
+            trial_fisher = [tf.zeros_like(w) for w in model.trainable_variables]
+            for bx in current_trial_buffer:
+                with tf.GradientTape() as tape2:
+                    q_vals = model(bx, training=False)
+                    max_q = tf.reduce_max(q_vals)
+                grads2 = tape2.gradient(max_q, model.trainable_variables)
+                
+                for i, g in enumerate(grads2):
+                    if g is not None:
+                        trial_fisher[i] += tf.square(g) / float(len(current_trial_buffer))
+            
+            # Apply exponential decay to the historical Fisher matrix, then add the new one
+            for i in range(len(running_fisher)):
+                running_fisher[i] = (fisher_decay * running_fisher[i]) + trial_fisher[i]
+            
+            # Update anchor weights to the CURRENT state
+            star_weights = [tf.identity(w) for w in model.trainable_variables]
+            
+            current_trial_buffer.clear()
+
+    if weights_save_path is not None and t == T - 1:
+        model.save_weights(weights_save_path)
+        logger.info(f"[DQN] Saved final weights to {weights_save_path}")
+
+    return np.array(pred), np.array(when_explore), gamma
 
 # Defining the LGBM based Q-Learning Function
 # Building the LGBM Model
