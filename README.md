@@ -68,7 +68,3 @@ src/RL_decoders/inference.sh
 ```
 
 ---
-
-### Outputs
-<img width="1000" height="500" alt="idx_performance_comparison" src="https://github.com/user-attachments/assets/2cb4eca9-2714-4c63-b99b-f0ee35b6c50a" />
-
