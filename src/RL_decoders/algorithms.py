@@ -482,7 +482,7 @@ def DQN(X, Y, day_info, error, sparsity_rate, epsilon, gamma, weights_load_path=
 #     return np.array(pred), np.array(when_explore), gamma
 
 
-def DQN_ewc(X, Y, day_info, error, sparsity_rate, epsilon, gamma, ewc_lambda=1.0, fisher_decay=0.95, trial_ids=None, weights_load_path=None, weights_save_path=None):
+def DQN_ewc(X, Y, day_info, error, sparsity_rate, epsilon, gamma, ewc_lambda=0.1, fisher_decay=0.95, trial_ids=None, weights_load_path=None, weights_save_path=None):
     """
     Online EWC for DQN. Calculates the Fisher Information Matrix at the end of 
     every trial and applies an exponential decay to forget distant past data.

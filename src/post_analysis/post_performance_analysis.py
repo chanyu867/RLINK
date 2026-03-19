@@ -20,7 +20,7 @@ parser.add_argument("--transition_only", action='store_true', help="Plot only tr
 
 args = parser.parse_args()
 class_task_table = {2: "0.5"}
-models_to_analyze = ["DQN"]
+models_to_analyze = ["banditron", "banditronRP", "HRL", "AGREL", "DQN"]
 
 if args.post_analysis:
     for shift in [0]:
@@ -104,4 +104,4 @@ if args.post_analysis:
             # 6. Execute Continuous F1-Score Plot
             print(f"[*] Generating Continuous F1-Score Plot...")
             metric = "accuracy"  # Change to "f1" if you want F1-Score instead
-            plot_continuous_performance(model_paths_dict, day_number, metric="accuracy", resolution=1000) # <-- ADD THIS LINE
+            plot_continuous_performance(model_paths_dict, day_number, metric="f1", resolution=1000) # <-- ADD THIS LINE
