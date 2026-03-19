@@ -1,0 +1,63 @@
+#!/bin/bash
+
+finger_ID="idx"        # or mrs
+mode="position"        # position decoding
+sbp_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/sbp_all.npy"
+day_info_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/day_number.npy"
+trial_bin="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/trial_bin.npy"
+target_style_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/all/target_style.npy"
+
+out_dir="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/baseline_perf/hpo/mlp_cv"
+mkdir -p "$out_dir"
+
+# for boundary in "0.5" "0.33_0.66"; do #"0.33_0.66" "0.25_0.5_0.75" "0.2_0.4_0.6_0.8"
+#     for slicing in 1; do
+#         label_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/classes_dir/${finger_ID}_${mode}_labels_${boundary}_shift0.npy"
+        
+#         # ADDING label_mask based on the boundary setup (dropping the middle class)
+#         python mlp_hpo.py \
+#             --sbp_path ${sbp_path} \
+#             --trial_bin_path ${trial_bin} \
+#             --label_path ${label_path} \
+#             --day_info_path ${day_info_path} \
+#             --slicing_day ${slicing} \
+#             --target_style_path ${target_style_path} \
+#             --label_mask "0,2" \
+#             --epochs 50 \
+#             --n_trials 200 \
+#             --metric "f1_macro" \
+#             --save_best_json "${out_dir}/hpo_${boundary}_slicing${slicing}.json"
+
+#     done
+# done
+
+boundary="0.33_0.66"
+slicing=5
+label_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/classes_dir/${finger_ID}_${mode}_labels_${boundary}_shift0.npy"
+python /Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/RLINK/src/baselines/mlp_hpo.py \
+    --sbp_path ${sbp_path} \
+    --trial_bin_path ${trial_bin} \
+    --label_path ${label_path} \
+    --day_info_path ${day_info_path} \
+    --slicing_day ${slicing} \
+    --target_style_path ${target_style_path} \
+    --label_mask "0,2" \
+    --epochs 50 \
+    --n_trials 200 \
+    --metric "f1_macro" \
+    --save_best_json "${out_dir}/hpo_${boundary}_slicing${slicing}_eliminate-center.json"
+
+# boundary="0.2_0.4_0.6_0.8"
+# label_path="/Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/Data/classes_dir/${finger_ID}_${mode}_labels_${boundary}_shift0.npy"
+# python /Users/chanyu/Dropbox/NeuroData2025/BIU/ML_proj/RLINK/src/baselines/mlp_hpo.py \
+#     --sbp_path ${sbp_path} \
+#     --trial_bin_path ${trial_bin} \
+#     --label_path ${label_path} \
+#     --day_info_path ${day_info_path} \
+#     --slicing_day ${slicing} \
+#     --target_style_path ${target_style_path} \
+#     --label_mask "0,1,3,4" \
+#     --epochs 50 \
+#     --n_trials 200 \
+#     --metric "f1_macro" \
+#     --save_best_json "${out_dir}/hpo_${boundary}_slicing${slicing}_eliminate-center.json"
