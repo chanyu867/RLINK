@@ -1,6 +1,6 @@
 
-<img width="2816" height="1536" alt="Gemini_Generated_Image_16cblk16cblk16cb" src="https://github.com/user-attachments/assets/12e8f545-c3d2-4781-9395-b549432e7678" />
 
+<img width="2816" height="1536" alt="Gemini_Generated_Image_16cblk16cblk16cb" src="https://github.com/user-attachments/assets/099732b6-d241-4636-8037-fd65f8e37135" />
 
 # RLINK - Reinforcement Learning for LINK dataset
 This is a repository for ML final project in Bar-Ilan University in 2025. The code contains implementations and analyses of **reinforcement learning–based neural decoders** applied to intracortical brain–machine interface (iBMI) data from the **LINK dataset**. The project focuses on lightweight, online-learning decoders that are robust to **neural non-stationarity** across recording sessions and days.
