@@ -1,3 +1,7 @@
+
+<img width="2816" height="1536" alt="Gemini_Generated_Image_16cblk16cblk16cb" src="https://github.com/user-attachments/assets/12e8f545-c3d2-4781-9395-b549432e7678" />
+
+
 # RLINK - Reinforcement Learning for LINK dataset
 This is a repository for ML final project in Bar-Ilan University in 2025. The code contains implementations and analyses of **reinforcement learning–based neural decoders** applied to intracortical brain–machine interface (iBMI) data from the **LINK dataset**. The project focuses on lightweight, online-learning decoders that are robust to **neural non-stationarity** across recording sessions and days.
 
@@ -28,6 +32,11 @@ The following decoders are implemented and evaluated:
 - Local, biologically plausible weight updates
 - Serves as a reinforcement-based baseline decoder
 
+### 5. DQN (Deep Q Netwoek)
+
+- A value-based RL algorithm
+- utilize a deep neural network to approximate the optimal action-value function
+
 ---
 
 ## Dataset: LINK
@@ -37,19 +46,6 @@ We use neural recordings from the **LINK dataset**, where neural features are pr
 - **SBP (Spiking-Band Power)**  
   Power of high-frequency spiking-band signals (e.g., 300–1000 Hz)
 
-- **TCR (Threshold Crossing Rate)**  
-  Number of voltage threshold crossings within each bin
-
-These features provide complementary representations of multi-unit activity.
-
-## Key Analyses
-
-- Accuracy over time (block-wise / day-wise)
-- Identification of low-performance days
-- Per-day sample and block statistics
-- Electrode × day SBP heatmaps
-- Model comparison plots across time
-
 ---
 
 ## How to run
@@ -57,14 +53,30 @@ These features provide complementary representations of multi-unit activity.
 Example: running a decoder and plotting performance
 
 ```
+## 0. craete environment
 python -m venv RL_env
 source activate RL_env/bin/activate
 git clone https://github.com/chanyu867/RLINK.git
 cd RLINK
-git switch RL-side #make sure you are in right branch
 pip install -r requirements.txt
-chmod u+x src/RL_decoders/inference.sh
-src/RL_decoders/inference.sh
+
+## 1. run hyper-parameter optimization
+chmod +x src/baselines/mlp_hpo.sh src/RL_decoders/hpo.sh
+./src/baselines/mlp_hpo.sh #for baseline model (MLP)
+./src/RL_decoders/hpo.sh #for Reinforcement Learning models
+
+## 2. run model training
+chmod +x src/baselines/mlp_train.sh src/baselines/mlp_train_day.sh src/RL_decoders/inference.sh
+./src/baselines/mlp_train.sh #train fixed-weights model (MLP)
+./src/baselines/mlp_train_day.sh #train per-day models (MLP)
+./src/RL_decoders/inference.sh #train RL-based models
+
+## 3. evaluation
+chmod +x src/baselines/mlp_eval.sh src/baselines/mlp_eval_day.sh
+./src/baselines/mlp_eval.sh #for fixded-weights model (MLP)
+./src/baselines/mlp_eval_day.sh #for per-day models (MLP)
+python -m src.post_analysis.post_performance_analysis --post_analysis #for RL-based models
+
 ```
 
 ---
